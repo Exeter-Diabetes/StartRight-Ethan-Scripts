@@ -1,0 +1,435 @@
+---
+title: "Investigating whether T1D models can identify T2-misdiagnoses."
+author: "Ethan de Villiers"
+date: "`r Sys.Date()`"
+output: html_document
+---
+# Introduction
+
+
+## Init
+
+``` {r Packages}
+library(tidyverse) # streamlining R coding since 2016
+library(rio) # Import/Output master package
+library(psych) # Essential for descriptive stats
+library(pROC) # ROC curves and such.
+library (rsq) # Used for R-squared values
+library(ggplot2) # Advanced Graphs
+library(tableone) # Nice descriptives for tables
+# library(val.prob) Out dated for this version of R - useful for calibration 
+```
+
+``` {r ImportingData}
+filepath = 'startight Aug 22 comma separated.csv'
+my_data <- import(filepath)
+
+#> View(my_data)
+```
+
+## Prepping Data
+
+Notes on Data
+- age_atdiag is the exact patient age in double form
+- AgeatDiagnosis is the patient age in int form (used)
+- In equations where AGE is used, AgeatDiag was used instead - need to fix!
+- no current clean GAD, ZNT8 code
+- Islet autoantibodies were considered positive if: 
+  - GADA ≥11 units/mL, IA2A ≥7.5 units/mL and ZNT8A ≥65 units/mL in those aged up to 30 years and ≥10 units/mL in those aged ≥30 years (17, 18)
+- GRS Scores:
+  - Correct GRS version = variable: "GRS"
+  - No current, calibrated/standardised GRS scores against a type-1 enriched cohort
+
+``` {r Cleaning and Prepping Data}
+# Creating Anibody columns ####
+#New column GADA_Status will default to NA, and if negative = 0, positive = 1
+my_data = my_data %>%
+  mutate(GAD_status = ifelse(GAD == 'negative', 0, NA)) %>%
+  mutate(GAD_status = ifelse(grepl("[0-9]",GAD) & as.numeric(GAD) >= 11, 1, GAD_status))
+
+#New column IA2_status will default to NA, and if negative = 0, positive = 1
+my_data = my_data %>%
+  mutate(IA2_status = ifelse(IA2 == 'negative', 0, NA)) %>%
+  mutate(IA2_status = ifelse(grepl("[0-9]",IA2) & as.numeric(IA2) >= 7.5, 1, IA2_status))
+
+#New column ZNT8_Status will default to NA, and if negative = 0, positive = 1
+my_data = my_data %>%
+  mutate(ZNT_status = ifelse(ZNT8 == 'negative', 0, NA)) %>%
+  mutate(ZNT_status = ifelse(grepl("[0-9]",ZNT8) & as.numeric(ZNT8) >= 65, 1, ZNT_status))
+
+#Filling in BMI for missing values
+my_data = my_data %>%
+  mutate(BMI = ifelse(is.na(BMI), Weight / (Height^2), BMI))
+
+#Creating column for how many antibodies a patient has, sum()
+my_data$Number_Antibodies = rowSums(my_data[,c("GAD_status", "IA2_status", "ZNT_status")], na.rm=TRUE)
+
+
+# Calibrating GRS-Scores ####
+#Creating Type-1 enriched cohort
+type_1_control_cohort = my_data %>%
+  filter(Insulin == "Yes" & Number_Antibodies >= 2 & Type_of_diabetes == "Type 1") %>%
+  filter(SCORE != '' & !is.na(SCORE)) # n = 456
+
+#Calibrating GRS-Scores (pnorm())
+my_data$Calibrated_GRS_Centiles = pnorm(my_data$SCORE, mean = mean(type_1_control_cohort$SCORE), sd = sd(type_1_control_cohort$SCORE))
+
+#Calculating Time To Insulin
+my_data = my_data %>%
+  mutate(Time_to_insulin = difftime(
+    as.Date(Date_continuous_insulin, "%d-%b-%y"),
+    as.Date(DateofDiagnosis, "%d-%b-%y"),
+    units = "weeks")
+  ) %>%
+  mutate(Time_to_insulin = as.numeric(Time_to_insulin)) %>%
+  mutate(Time_to_insulin = ifelse(Time_to_insulin < 0, 0, Time_to_insulin))
+
+
+
+```
+
+
+
+
+
+
+``` {r Generating Model Probabilities}
+# Clin F Model = 37.94 + (-5.09 * log(age at diagnosis)) + (-6.34 * log(BMI))
+# Clin F + GAD Model = 34.8057844720 + (-4.801441792 * log (Age at diagnosis)) + (-5.980577792 * log(BMI)) + (2.937107976 * GADA)
+# Clin F + IA2 Model = 37.26905033 + (3.194096 * IA2† ) + (-5.047657308 * Log(Age)) + (-6.287258808 * Log(BMI))
+# Clin F + Antibodies (ZNT8/IA2) = 33.49649577 + (-4.665598345 * Log(Age)) + (-5.81137397 * Log(BMI)) + (3.082366 * AntiStatus1‡) + (3.494462 * AntiStatus2‡) + (4.350717 * AntiStatus3‡)
+# Clin F + Anti + GRS = 21.57649882 + (-4.086215772 * log(Age)) + (-5.096252172 * log(BMI)) + (2.702010666 * [GAD POSITIVE ONLY 1 OR 0]) + (3.063255174 * [IA2 POSITIVE ONLY 1 OR 0]) + (3.813850704 * [BOTH GAD AND IA2 POSITIVE 1 OR 0]) + (30.11052 * GRS)
+
+
+my_data = my_data %>% # First Model: Clinical Features alone (Age + BMI)
+  mutate( logOR_clinF = 37.94 + (-5.09*log(AgeatDiagnosis)) + (-6.34 * log(BMI)) )
+
+my_data = my_data %>% # Second Model: ClinF and GAD (Age, BMI, GAD)
+  mutate( logOR_clinF_GAD = 34.8057844720 + (-4.801441792 * log (AgeatDiagnosis)) + (-5.980577792 * log(BMI)) + (2.937107976 * GAD_status))
+
+my_data = my_data %>% # Third Model: ClinF and IA2 (Age, BMI, IA2)
+  mutate( logOR_clinF_IA2 = 37.26905033 + (3.194096 * IA2_status ) + (-5.047657308 * log(AgeatDiagnosis)) + (-6.287258808 * log(BMI)))
+  
+my_data = my_data %>% # Fourth Model: ClinF and Antibodies (Age, BMI, GAD, IA2)
+  mutate( logOR_clinF_Antibodies = 33.49649577 +
+            (-4.665598345 * log(AgeatDiagnosis)) +
+            (-5.81137397 * log(BMI)) +
+            (3.082366 * GAD_status) +
+            (3.494462 * IA2_status) +
+            (4.350717 * ifelse(Number_Antibodies >= 2, 1, 0))
+  )
+
+my_data = my_data %>% # Fifth Model: ClinF + Anti + GRS (Age, BMI, GAD, IA2, GRS)
+  mutate( logOR_clinF_antiGRS = 21.57649882 +
+            (-4.086215772 * log(AgeatDiagnosis)) +
+            (-5.096252172 * log(BMI)) +
+            (2.702010666 * GAD_status) +
+            (3.063255174 * IA2_status) +
+            (3.813850704 * ifelse(Number_Antibodies >= 2, 1, 0)) +
+            (30.11052 * GRS)
+  )
+
+```
+
+``` {r Converting logOdds Ratio}
+# exp(LogOR) / (1 + exp(LogOR)
+
+my_data = my_data %>%
+  mutate(model_clinF = exp(logOR_clinF) / (1 + exp(logOR_clinF)))
+
+my_data = my_data %>%
+  mutate(model_clinF_GAD = exp(logOR_clinF_GAD) / (1 + exp(logOR_clinF_GAD)))
+
+my_data = my_data %>%
+  mutate(model_clinF_IA2 = exp(logOR_clinF_IA2) / (1 + exp(logOR_clinF_IA2)))
+
+my_data = my_data %>%
+  mutate(model_clinF_Anti = exp(logOR_clinF_Antibodies) / (1 + exp(logOR_clinF_Antibodies)))
+
+my_data = my_data %>%
+  mutate(model_clinF_AntiGRS = exp(logOR_clinF_antiGRS) / (1 + exp(logOR_clinF_antiGRS)))
+
+```
+
+``` {r Type-2 Cohort building}
+# Not initially treated with insulin
+Type2_cohort = my_data %>%
+  filter(Initial_diabetes_Insulin != "Insulin") # Ensure not initially treated
+
+# Saving general descriptives to 
+
+#Descriptives
+type = Type2_cohort %>%
+  select(Time_to_insulin, AgeatDiagnosis, BMI, GRS, HbA1c_at_diagnosis) %>%
+  describe()
+
+nrow(
+  Type2_cohort %>%
+    filter(Time_to_insulin <= 156)
+)
+```
+
+## Data Analysis
+
+###Descriptive Statistics
+``` {r Type-2 Cohort Baseline Table}
+
+# Creating dummy variable
+Type2_cohort = Type2_cohort %>%
+  mutate(progressed = ifelse(!is.na(Time_to_insulin), "Progressed", "Did not progress"))
+
+
+
+table = print(
+  CreateTableOne(
+    data=Type2_cohort,
+    vars = c("BMI", "AgeatDiagnosis", "GRS", "HbA1c_at_diagnosis", "model_clinF",
+             "model_clinF_GAD", "model_clinF_IA2", "model_clinF_Anti",
+             "model_clinF_AntiGRS", "Number_Antibodies"),
+    strata = "progressed"
+  ),
+  test = FALSE,
+  noSpaces = TRUE
+)
+
+write.csv(table, file = "testTable.csv")
+#> Take .CSV file and upload text to: 
+#> https://www.becsv.com/csv-table.php
+#> Generate and HTML table, and download to an .htm document
+#> Open doc and copy/paste HTML table into word --> powerpoint :)
+#> OR open .csv in Excel and copy paste across
+
+#> Calculating How many were single/double antibody positive/negative
+nrow(
+  Type2_cohort %>%
+    filter(progressed != "Progressed") %>%
+    filter(Number_Antibodies > 2)
+)
+
+```
+
+### Models Section
+``` {r 1: Clinical Features Model}
+#> This section dedicated to the Clin F slide
+#> Incorporates: ROC, Calibration, and ggViolin
+Type2_cohort$model_clinF
+
+# Distribution: ggViolin
+
+ggplot(Type2_cohort, aes(x=progressed, y=model_clinF)) + 
+  geom_violin() +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+  labs(title = "Clinical Features Model Distribution") +
+  ylab("Clinical Features Model Probability") +
+  xlab("Outcomes")
+
+# ROC AUC
+roc_data = Type2_cohort %>%
+  filter(!is.na(progressed) & !is.na(model_clinF)) %>%
+  mutate(progressed = ifelse(progressed == "Progressed", 1, 0))
+
+glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF, family = binomial())
+plot.new()
+lines(roc_data$model_clinF, glm.fit$fitted.values)
+
+(roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
+
+coords(roc, x='best')
+
+
+
+```
+
+``` {r 2: Clin F + GAD Model}
+#> This section dedicated to the Clin F + slide
+#> Incorporates: ROC, Calibration, and ggViolin
+Type2_cohort$model_clinF_GAD
+
+# Distribution: ggViolin
+
+ggplot(Type2_cohort, aes(x=progressed, y=model_clinF_GAD)) + 
+  geom_violin() +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+  labs(title = "Clinical Features + GAD Model Distribution") +
+  ylab("Clinical Features + GAD Model Probability") +
+  xlab("Outcomes")
+
+# ROC AUC
+roc_data = Type2_cohort %>%
+  filter(!is.na(progressed) & !is.na(model_clinF_GAD)) %>%
+  mutate(progressed = ifelse(progressed == "Progressed", 1, 0))
+
+glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_GAD, family = binomial())
+plot.new()
+lines(roc_data$model_clinF_GAD, glm.fit$fitted.values)
+
+(roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
+
+coords(roc, x='best')
+```
+
+``` {r 3: Clin F + IA2 Model}
+#> This section dedicated to the Clin F + slide
+#> Incorporates: ROC, Calibration, and ggViolin
+Type2_cohort$model_clinF_IA2
+
+# Distribution: ggViolin
+
+ggplot(Type2_cohort, aes(x=progressed, y=model_clinF_IA2)) + 
+  geom_violin() +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+  labs(title = "Clinical Features + IA2 Model Distribution") +
+  ylab("Clinical Features + IA2 Model Probability") +
+  xlab("Outcomes")
+
+# ROC AUC
+roc_data = Type2_cohort %>%
+  filter(!is.na(progressed) & !is.na(model_clinF_IA2)) %>%
+  mutate(progressed = ifelse(progressed == "Progressed", 1, 0))
+
+glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_IA2, family = binomial())
+plot.new()
+lines(roc_data$model_clinF_IA2, glm.fit$fitted.values)
+
+(roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
+
+coords(roc, x='best')
+```
+
+``` {r 4: Clin F + GAD and IA2 Model}
+#> This section dedicated to the Clin F + slide
+#> Incorporates: ROC, Calibration, and ggViolin
+Type2_cohort$model_clinF_Anti
+
+# Distribution: ggViolin
+
+ggplot(Type2_cohort, aes(x=progressed, y=model_clinF_Anti)) + 
+  geom_violin() +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+  labs(title = "Clinical Features + GAD and IA2 Model Distribution") +
+  ylab("Clinical Features + GAD and IA2 Model Probability") +
+  xlab("Outcomes")
+
+# ROC AUC
+roc_data = Type2_cohort %>%
+  filter(!is.na(progressed) & !is.na(model_clinF_Anti)) %>%
+  mutate(progressed = ifelse(progressed == "Progressed", 1, 0))
+
+glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_Anti, family = binomial())
+plot.new()
+lines(roc_data$model_clinF_Anti, glm.fit$fitted.values)
+
+(roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
+
+coords(roc, x='best')
+```
+
+``` {r 5: Clin F + Anti + GRS Model}
+#> This section dedicated to the Clin F + slide
+#> Incorporates: ROC, Calibration, and ggViolin
+Type2_cohort$model_clinF_AntiGRS
+
+# Distribution: ggViolin
+
+ggplot(Type2_cohort, aes(x=progressed, y=model_clinF_AntiGRS)) + 
+  geom_violin() +
+  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
+  labs(title = "Clinical Features + Anti + GRS Model Distribution") +
+  ylab("Clinical Features + Anti + GRS Model Probability") +
+  xlab("Outcomes")
+
+# ROC AUC
+roc_data = Type2_cohort %>%
+  filter(!is.na(progressed) & !is.na(model_clinF_AntiGRS)) %>%
+  mutate(progressed = ifelse(progressed == "Progressed", 1, 0))
+
+glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_AntiGRS, family = binomial())
+plot.new()
+lines(roc_data$model_clinF_AntiGRS, glm.fit$fitted.values)
+
+(roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
+
+coords(roc, x='best')
+
+```
+
+```{r Graphing Model Distributions - LEGACY}
+
+Type2_cohort %>%
+  select(model_clinF, model_clinF_GAD, model_clinF_IA2, model_clinF_Anti, model_clinF_AntiGRS, Time_to_insulin) %>%
+  mutate(Time_to_insulin = ifelse(!is.na(Time_to_insulin), "Progressed", "Did not progress")) %>%
+  rename("Clin Features Model" = "model_clinF") %>%
+  rename("Clin + GAD" = "model_clinF_GAD") %>%
+  rename("Clin + IA2" = "model_clinF_IA2") %>%
+  rename("Clin + Antibodies" = "model_clinF_Anti") %>%
+  rename("Clin + Anti + GRS" = "model_clinF_AntiGRS") %>%
+  gather(key = key, value = value, -Time_to_insulin) %>%
+  ggplot2::ggplot() +
+  geom_violin(aes(x = key, y = value,)) +
+  xlab('Models') +
+  ylab('Probability') +
+  geom_smooth(aes(x = key, y = value), method = 'lm') +
+  facet_wrap(~ Time_to_insulin)
+
+```
+
+
+``` {r Exploring Clin + Anti + GRS Deciles - OPTIONAL}
+#> Primary aim of this section is to explore why the model was able to detect some
+#> individuals who progressed, but not others
+#> So looking at model deciles within the progressed cohort
+
+#> Making temp cohort for desc analysis
+type2_progressed = Type2_cohort %>%
+  filter(progressed == "Progressed") %>%
+  mutate(decile = dplyr::ntile(model_clinF_AntiGRS, 10))
+
+table = print(
+  CreateTableOne(
+    data=type2_progressed,
+    vars = c("BMI", "AgeatDiagnosis", "GRS", "HbA1c_at_diagnosis", "model_clinF",
+             "model_clinF_GAD", "model_clinF_IA2", "model_clinF_Anti",
+             "model_clinF_AntiGRS", "Number_Antibodies"),
+    strata = "decile"
+  ),
+  test = FALSE,
+  noSpaces = TRUE
+)
+
+write.csv(table, file = "testTable.csv")
+
+#Removing temporary variables
+remove(table)
+remove(type2_progressed)
+```
+
+
+
+
+``` {r Legacy Unused Code}
+#### Graphing Violion models against eachother #####################
+#> Clin features model
+#> Clin features + autoantibodies (GAD IA2)
+#> compared using gg VIOLIN Plot
+not_insulin %>%
+  filter(!is.na(Model4Prob) & !is.na(Model1Prob) & !is.na(Model5Prob)) %>%
+  select(Model1Prob, Model4Prob, Model5Prob) %>%
+  rename("Clin Features Model" = "Model1Prob") %>%
+  rename("Clin + Antibody Model" = "Model4Prob") %>%
+  rename("Clin + Anti + GRS Model" = "Model5Prob") %>%
+  gather() %>%
+  ggplot2::ggplot() +
+  geom_violin(aes(x = key, y = value)) +
+  xlab('Models') +
+  ylab('Probability') +
+  geom_smooth(aes(x = key, y = value), method = 'lm')
+
+#### 
+
+
+
+
+```
+
+
+
