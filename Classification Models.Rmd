@@ -17,6 +17,7 @@ library(pROC) # ROC curves and such.
 library (rsq) # Used for R-squared values
 library(ggplot2) # Advanced Graphs
 library(tableone) # Nice descriptives for tables
+library(rms) # Val.prob mainly
 # library(val.prob) Out dated for this version of R - useful for calibration 
 ```
 
@@ -209,13 +210,21 @@ nrow(
 ```
 
 ### Models Section
+
+``` {r Creating Dataframe for ROC Cohort}
+roc_data = Type2_cohort %>%
+  filter(!is.na(progressed) &!is.na(model_clinF) & !is.na(model_clinF_Anti) &
+           !is.na(model_clinF_AntiGRS) & !is.na(model_clinF_GAD) &
+           !is.na(model_clinF_IA2) ) %>%
+  mutate(progressed = ifelse(progressed == "Progressed", 1, 0))
+```
+
 ``` {r 1: Clinical Features Model}
 #> This section dedicated to the Clin F slide
 #> Incorporates: ROC, Calibration, and ggViolin
 Type2_cohort$model_clinF
 
 # Distribution: ggViolin
-
 ggplot(Type2_cohort, aes(x=progressed, y=model_clinF)) + 
   geom_violin() +
   stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
@@ -224,10 +233,6 @@ ggplot(Type2_cohort, aes(x=progressed, y=model_clinF)) +
   xlab("Outcomes")
 
 # ROC AUC
-roc_data = Type2_cohort %>%
-  filter(!is.na(progressed) & !is.na(model_clinF)) %>%
-  mutate(progressed = ifelse(progressed == "Progressed", 1, 0))
-
 glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF, family = binomial())
 plot.new()
 lines(roc_data$model_clinF, glm.fit$fitted.values)
@@ -236,7 +241,8 @@ lines(roc_data$model_clinF, glm.fit$fitted.values)
 
 coords(roc, x='best')
 
-
+# Calibration
+val.prob(roc_data$model_clinF, roc_data$progressed)
 
 ```
 
@@ -246,7 +252,6 @@ coords(roc, x='best')
 Type2_cohort$model_clinF_GAD
 
 # Distribution: ggViolin
-
 ggplot(Type2_cohort, aes(x=progressed, y=model_clinF_GAD)) + 
   geom_violin() +
   stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
@@ -255,10 +260,6 @@ ggplot(Type2_cohort, aes(x=progressed, y=model_clinF_GAD)) +
   xlab("Outcomes")
 
 # ROC AUC
-roc_data = Type2_cohort %>%
-  filter(!is.na(progressed) & !is.na(model_clinF_GAD)) %>%
-  mutate(progressed = ifelse(progressed == "Progressed", 1, 0))
-
 glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_GAD, family = binomial())
 plot.new()
 lines(roc_data$model_clinF_GAD, glm.fit$fitted.values)
@@ -266,6 +267,9 @@ lines(roc_data$model_clinF_GAD, glm.fit$fitted.values)
 (roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
 
 coords(roc, x='best')
+
+# Calibration
+val.prob(roc_data$model_clinF_GAD, roc_data$progressed)
 ```
 
 ``` {r 3: Clin F + IA2 Model}
@@ -283,10 +287,6 @@ ggplot(Type2_cohort, aes(x=progressed, y=model_clinF_IA2)) +
   xlab("Outcomes")
 
 # ROC AUC
-roc_data = Type2_cohort %>%
-  filter(!is.na(progressed) & !is.na(model_clinF_IA2)) %>%
-  mutate(progressed = ifelse(progressed == "Progressed", 1, 0))
-
 glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_IA2, family = binomial())
 plot.new()
 lines(roc_data$model_clinF_IA2, glm.fit$fitted.values)
@@ -294,6 +294,9 @@ lines(roc_data$model_clinF_IA2, glm.fit$fitted.values)
 (roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
 
 coords(roc, x='best')
+
+#Calibration
+val.prob(roc_data$model_clinF_IA2, roc_data$progressed)
 ```
 
 ``` {r 4: Clin F + GAD and IA2 Model}
@@ -311,10 +314,6 @@ ggplot(Type2_cohort, aes(x=progressed, y=model_clinF_Anti)) +
   xlab("Outcomes")
 
 # ROC AUC
-roc_data = Type2_cohort %>%
-  filter(!is.na(progressed) & !is.na(model_clinF_Anti)) %>%
-  mutate(progressed = ifelse(progressed == "Progressed", 1, 0))
-
 glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_Anti, family = binomial())
 plot.new()
 lines(roc_data$model_clinF_Anti, glm.fit$fitted.values)
@@ -322,6 +321,9 @@ lines(roc_data$model_clinF_Anti, glm.fit$fitted.values)
 (roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
 
 coords(roc, x='best')
+
+#Calibration
+val.prob(roc_data$model_clinF_Anti, roc_data$progressed)
 ```
 
 ``` {r 5: Clin F + Anti + GRS Model}
@@ -351,6 +353,8 @@ lines(roc_data$model_clinF_AntiGRS, glm.fit$fitted.values)
 
 coords(roc, x='best')
 
+#Calibration
+val.prob(roc_data$model_clinF_AntiGRS, roc_data$progressed)
 ```
 
 ```{r Graphing Model Distributions - LEGACY}
