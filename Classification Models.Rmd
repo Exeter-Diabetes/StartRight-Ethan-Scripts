@@ -88,17 +88,17 @@ my_data = my_data %>%
   mutate(Time_to_insulin = as.numeric(Time_to_insulin)) %>%
   mutate(Time_to_insulin = ifelse(Time_to_insulin < 0, 0, Time_to_insulin))
 
+# Calculating Duration of Diabetes - Date of diagnosis until final clinic date = YEARS
+my_data = my_data %>%
+  mutate(Duration_diabetes = as.numeric(
+    difftime(
+      as.Date(V3Date_Contacted, "%d/%m/%Y"),
+      as.Date(DateofDiagnosis, "%d-%b-%y"),
+      units = "weeks"
+    )/52
+  )
+  )
 ```
-
-
-progressed = V3 
-
-duration of follow up = 
-
-
-
-
-
 
 
 ``` {r Generating Model Probabilities}
@@ -215,13 +215,12 @@ Type2_cohort %>%
 
 ###Descriptive Statistics
 ``` {r Type-2 Cohort Baseline Table}
-
 table = print(
   CreateTableOne(
     data=Type2_cohort,
     vars = c("BMI", "AgeatDiagnosis", "GRS", "HbA1c_at_diagnosis", "model_clinF",
              "model_clinF_GAD", "model_clinF_IA2", "model_clinF_Anti",
-             "model_clinF_AntiGRS", "Number_Antibodies"),
+             "model_clinF_AntiGRS", "Number_Antibodies", "Duration_diabetes"),
     strata = "progressed"
   ),
   test = FALSE,
