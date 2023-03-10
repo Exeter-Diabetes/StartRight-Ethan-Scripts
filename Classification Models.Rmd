@@ -512,90 +512,129 @@ nrow(
 ```
 
 ``` {r Model Calibrations by Deciles}
-deciles = list(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
+#> Changes - Don't graph according to model probability, but decile of population
+#> Can do this using ntile() function
+
 results = list()
 
+#> Generating ntiles
+Type2_cohort = Type2_cohort %>%
+  mutate(model_clinF_percentiles = ntile(model_clinF, 10)) %>%
+  mutate(model_clinF_Anti_percentiles = ntile(model_clinF_Anti, 10)) %>%
+  mutate(model_clinF_AntiGRS_percentiles = ntile(model_clinF_AntiGRS, 10))
+
+# Need to initialize new column so loop works
+Type2_cohort$model_clinF_percentiles_results = NA
+Type2_cohort$model_clinF_Anti_percentiles_results = NA
+Type2_cohort$model_clinF_AntiGRS_percentiles_results = NA
+
+# Loop to calculate % progressed in CLIN F MODEL
 for (x in 1:10){
-  # Need to handle first and last number specially
-  if (x == 1) {
-    print('# Of patients with Antibodies within first Decile = ')
-    total = Type2_cohort %>%
-      filter(model_clinF_AntiGRS <= 0.1) %>%
+  total = Type2_cohort %>%
+      filter(model_clinF_percentiles == x) %>%
       nrow()
     
     antibody = Type2_cohort %>%
-      filter(model_clinF_AntiGRS <= 0.1 & progressed == 1) %>%
-      nrow()
-    results[1] = antibody/total
-    # Need to handle first and last number specially
-  } 
-  else if (x == 10){
-    print('# Of patients progressed to Insulin within last Decile = ')
-    total = Type2_cohort %>%
-      filter(model_clinF_AntiGRS > 0.9) %>%
+      filter(model_clinF_percentiles == x & progressed == 1) %>%
       nrow()
     
-    antibody = Type2_cohort %>%
-      filter(model_clinF_AntiGRS > 0.9 & progressed == 1) %>%
-      nrow()
-    results[10] = antibody / total
-    # Index 2-9 = core loop
-  } 
-  else {
-    print(paste('# Of patients antibody positive within Decile: ', x, ' = '))
-    total = Type2_cohort %>%
-      filter(model_clinF_AntiGRS > deciles[x-1] & model_clinF_AntiGRS <= deciles[x]) %>%
-      nrow()
-    
-    antibody = Type2_cohort %>%
-      filter(model_clinF_AntiGRS > deciles[x-1] & model_clinF_AntiGRS <= deciles[x] & progressed == 1) %>%
-      nrow()
-    
-    results[x] = antibody / total
-  }
+    Type2_cohort = Type2_cohort %>%
+      mutate(model_clinF_percentiles_results = ifelse(
+        model_clinF_percentiles == x,
+        antibody/total,
+        model_clinF_percentiles_results
+      ))
 }
 
-plot(deciles, results,
-     xlim = c(0,1),
-     ylim = c(0,1),
-     main = 'Clinical Features + Antibodies + GRS Model',
-     xlab = 'Clin F + Anti + GRS Model Probability',
-     ylab = '% Progressed to Insulin <= 3 years')
+# Loop to calculate % progressed in CLIN F + ANTI MODEL
+for (x in 1:10){
+  total = Type2_cohort %>%
+      filter(model_clinF_Anti_percentiles == x) %>%
+      nrow()
+    
+    antibody = Type2_cohort %>%
+      filter(model_clinF_Anti_percentiles == x & progressed == 1) %>%
+      nrow()
+    
+    Type2_cohort = Type2_cohort %>%
+      mutate(model_clinF_Anti_percentiles_results = ifelse(
+        model_clinF_Anti_percentiles == x,
+        antibody/total,
+        model_clinF_Anti_percentiles_results
+      ))
+}
 
-#For r-squared value
-summary(lm(unlist(results) ~ unlist(deciles), data=Type2_cohort))
+# Loop to calculate % progressed in CLIN F + ANTI + GRS MODEL
+for (x in 1:10){
+  total = Type2_cohort %>%
+      filter(model_clinF_AntiGRS_percentiles == x) %>%
+      nrow()
+    
+    antibody = Type2_cohort %>%
+      filter(model_clinF_AntiGRS_percentiles == x & progressed == 1) %>%
+      nrow()
+    
+    Type2_cohort = Type2_cohort %>%
+      mutate(model_clinF_AntiGRS_percentiles_results = ifelse(
+        model_clinF_AntiGRS_percentiles == x,
+        antibody/total,
+        model_clinF_AntiGRS_percentiles_results
+      ))
+}
 
-#graph trendline and print equation
-calibration_plot = lm(unlist(results) ~ unlist(deciles), data=Type2_cohort)
-lines(unlist(deciles),
-      predict(calibration_plot),
-      col = 2,
-      lwd = 2)
-abline(a=0, b=1) # Adding a y=x line
-(paste("y =", coef(calibration_plot)[[1]], "+", coef(calibration_plot)[[2]], "* x"))
+# Graphing Calibration plots - Clin F Model
+ggplot(Type2_cohort, aes((model_clinF_percentiles)/10, model_clinF_percentiles_results)) +
+  geom_point() +
+  scale_x_continuous(limits=c(0, 1), breaks=(1:10)/10) +
+  scale_y_continuous(limits=c(0, 1)) +
+  xlab("Deciles by Distribution") +
+  ylab("% Progressed to Insulin <= 3 years") +
+  labs(title = "Clinical Features Model Calibration Plot") +
+  geom_smooth(method=lm) +
+  geom_abline(slope=1, intercept=0)
 
+# Graphing Calibration plots - Clin F + Anti Model
+ggplot(Type2_cohort, aes((model_clinF_Anti_percentiles)/10, model_clinF_Anti_percentiles_results)) +
+  geom_point() +
+  scale_x_continuous(limits=c(0, 1), breaks=(1:10)/10) +
+  scale_y_continuous(limits=c(0, 1)) +
+  xlab("Deciles by Distribution") +
+  ylab("% Progressed to Insulin <= 3 years") +
+  labs(title = "Clin F + Anti Model Calibration Plot") +
+  geom_smooth(method=lm) +
+  geom_abline(slope=1, intercept=0)
 
-remove(results)
-remove(deciles)
+# Graphing Calibration plots - Clin F + Anti + GRS Model
+ggplot(Type2_cohort, aes((model_clinF_AntiGRS_percentiles)/10, model_clinF_AntiGRS_percentiles_results)) +
+  geom_point() +
+  scale_x_continuous(limits=c(0, 1), breaks=(1:10)/10) +
+  scale_y_continuous(limits=c(0, 1)) +
+  xlab("Deciles by Distribution") +
+  ylab("% Progressed to Insulin <= 3 years") +
+  labs(title = "Clin F + Anti + GRS Model Calibration Plot") +
+  geom_smooth(method=lm) +
+  geom_abline(slope=1, intercept=0)
+  
+# Cleaing Environment 
 remove(antibody)
 remove(total)
 ```
 
-``` {r Clinical Features Model Discerns Antibody Positivity}
+``` {r Clin F + Anti Model Discerns Antibody Positivity}
 #> This Section used to generate Graphs showing how Clin F Model discriminates antibody positive patients
 Type2_cohort$Antibody_Positive
 
 #Distribution 2.0: Boxplot
-ggplot(Type2_cohort,aes(as.factor(Number_Antibodies), model_clinF)) +
+ggplot(Type2_cohort,aes(as.factor(Antibody_Positive), model_clinF_Anti)) +
   geom_boxplot() +
   xlab("Antibody Positivity") +
-  ylab("Clinical Features Model Probabilities") +
+  ylab("Clin F + Antibodies Model Probabilities") +
   ylim(c(0,1))
 
 # ROC AUC
-glm.fit = glm(roc_data$Antibody_Positive ~ roc_data$model_clinF, family = binomial())
+glm.fit = glm(roc_data$Antibody_Positive ~ roc_data$model_clinF_Anti, family = binomial())
 plot.new()
-lines(roc_data$model_clinF, glm.fit$fitted.values)
+lines(roc_data$model_clinF_Anti, glm.fit$fitted.values)
 
 (roc = roc(roc_data$Antibody_Positive, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
 
