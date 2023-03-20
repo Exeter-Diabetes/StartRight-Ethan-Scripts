@@ -245,10 +245,12 @@ nrow(
 
 ### Models Section
 
-``` {r Creating Dataframe for ROC Cohort}
+``` {r Creating ROC_DATA dataframe for ROC Cohort}
 roc_data = Type2_cohort %>%
   filter(!is.na(progressed) &!is.na(model_clinF) & !is.na(model_clinF_Anti) &
            !is.na(model_clinF_AntiGRS) ) 
+roc_data = roc_data %>%
+  mutate(Multi_Antibody_Positive = ifelse(Number_Antibodies >= 2, 1, 0))
 #> REMOVED: & !is.na(model_clinF_GAD) & !is.na(model_clinF_IA2) & !is.na(model_clinF_GRS) & !is.na(model_clinF_Lipids) )
 
 # nrow(roc_data %>% filter(progressed == 1))
@@ -463,7 +465,7 @@ nrow(Type2_cohort)
 ```
 
 
-``` {r Investigating Antibodies for Comparison}
+``` {r Investigating If Antibodies Can Identify Progression}
 #> ggBoxPlot for antibody distribution
 ggplot(Type2_cohort, aes(as.factor(progressed), Number_Antibodies)) +
   geom_boxplot() +
@@ -620,41 +622,215 @@ remove(antibody)
 remove(total)
 ```
 
-``` {r Clin F + Anti Model Discerns Antibody Positivity}
-#> This Section used to generate Graphs showing how Clin F Model discriminates antibody positive patients
+```{r Clinical Features Model as a First-Line Screening Tool}
+#> This chunk is used to investigate the Clinical Features model as a screening tool
+#>  - Finds median of Type-2 antibody negative group as a threshold
+#>  - Generates a Boxplot and AUC ROC for the model against antibody outcomes
+
 Type2_cohort$Antibody_Positive
 
-#Distribution 2.0: Boxplot
-ggplot(Type2_cohort,aes(as.factor(Antibody_Positive), model_clinF_Anti)) +
-  geom_boxplot() +
-  xlab("Antibody Positivity") +
-  ylab("Clin F + Antibodies Model Probabilities") +
-  ylim(c(0,1))
+#> Find Median of Type 2 Antibody Negative group to use as threshold = 0.018535 (1.8%)
+Type2_cohort %>%
+  filter(Antibody_Positive == 0) %>%
+  select(model_clinF) %>%
+  describe()
 
-# ROC AUC
-glm.fit = glm(roc_data$Antibody_Positive ~ roc_data$model_clinF_Anti, family = binomial())
-plot.new()
-lines(roc_data$model_clinF_Anti, glm.fit$fitted.values)
-
-(roc = roc(roc_data$Antibody_Positive, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
-
-coords(roc, x='best')
-
-#> Following Section tests the Clin F + GRS Model to see if it works :D
-ggplot(Type2_cohort,aes(as.factor(Antibody_Positive), model_clinF_GRS)) +
+#> Generating a Boxplot for those who are antibody positive/negative with Clin F Model
+ggplot(Type2_cohort,aes(as.factor(Antibody_Positive), model_clinF)) +
   geom_boxplot() +
   xlab("Antibody Positivity") +
   ylab("Clinical Features Model Probabilities") +
   ylim(c(0,1))
 
-# ROC AUC
-glm.fit = glm(roc_data$Antibody_Positive ~ roc_data$model_clinF_GRS, family = binomial())
+# ROC AUC for Clinical Features Model discerning Single-Antibody Positivity
+glm.fit = glm(roc_data$Antibody_Positive ~ roc_data$model_clinF, family = binomial())
 plot.new()
-lines(roc_data$model_clinF_GRS, glm.fit$fitted.values)
+lines(roc_data$model_clinF, glm.fit$fitted.values)
 
 (roc = roc(roc_data$Antibody_Positive, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
 
 coords(roc, x='best')
+
+#> Generating a Boxplot for those who are MULTI - antibody +ve  against Clin F Model
+ggplot(Type2_cohort,aes(as.factor(Number_Antibodies >= 2), model_clinF)) +
+  geom_boxplot() +
+  xlab("Antibody Positivity") +
+  ylab("Clinical Features Model Probabilities") +
+  ylim(c(0,1))
+
+# ROC AUC for Clinical Features Model discerning MULTI-Antibody Positivity
+glm.fit = glm(roc_data$Multi_Antibody_Positive ~ roc_data$model_clinF, family = binomial())
+plot.new()
+lines(roc_data$model_clinF, glm.fit$fitted.values)
+
+(roc = roc(roc_data$Multi_Antibody_Positive, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
+
+coords(roc, x='best')
+
+
+#> Producing Numbers and percentages for the screening flowchart:
+#>  - To use this section, change the following threshold to a value of interest
+#>  - Previously used thresholds: 0.005 (bad), 0.018 (good), 0.05 (best), 0.071 (ROC), 0.1
+threshold = 0.071
+
+print(paste(
+  "Newly Diagnosed n =",
+  nrow(Type2_cohort)
+))
+
+print(paste(
+  "Patients with risk probability >=",
+  threshold,
+  "=",
+  nrow(
+    Type2_cohort %>% filter(model_clinF >= threshold)
+  ),
+  nrow(Type2_cohort %>% filter(model_clinF >= threshold))/nrow(Type2_cohort), "%"
+))
+
+print(paste(
+  "Patients with risk probability <",
+  threshold,
+  "=",
+  nrow(
+    Type2_cohort %>% filter(model_clinF < threshold)
+  ),
+  nrow(Type2_cohort %>% filter(model_clinF < threshold))/nrow(Type2_cohort), "%"
+))
+
+print(paste(
+  "# High Risk Antibody Positive =",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 1)
+  ),
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 1))/nrow(Type2_cohort %>% filter(model_clinF >= threshold)),
+  "%"
+))
+
+print(paste(
+  "# High Risk Antibody Negative =",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 0)
+  ),
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 0))/nrow(Type2_cohort %>% filter(model_clinF >= threshold)),
+  "%"
+))
+
+
+print(paste(
+  "# Low-risk patients who progress =",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF < threshold & progressed == 1)
+  ),
+  nrow(Type2_cohort %>% filter(model_clinF < threshold & progressed == 1))/
+    nrow(Type2_cohort %>% filter(model_clinF < threshold)),
+  "%"
+))
+
+print(paste(
+  "# Low-risk patients who DIDNT progress =",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF < threshold & progressed == 0)
+  ),
+  nrow(Type2_cohort %>% filter(model_clinF < threshold & progressed == 0))/
+    nrow(Type2_cohort %>% filter(model_clinF < threshold)),
+  "%"
+))
+
+print(paste(
+  "# High-risk, antibody +ve patients who progress",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 1)
+  ),
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 1)
+  )/ nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 1)
+  ),
+  "%"
+))
+
+print(paste(
+  "# High-risk, antibody +ve patients who DONT progress",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 0)
+  ),
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 0)
+  )/ nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 1)
+  ),
+  "%"
+))
+
+print(paste(
+  "# High-risk, antibody -ve patients who progress",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 0 & progressed == 1)
+  ),
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 0 & progressed == 1)
+  )/ nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 0)
+  ),
+  "%"
+))
+
+print(paste(
+  "# High-risk, antibody -ve patients who DONT progress",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 0 & progressed == 0)
+  ),
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 0 & progressed == 0)
+  )/ nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 0)
+  ),
+  "%"
+))
+
+
+print(paste(
+  "# Total Progression pickup rate (high risk, antibody +ve) =",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 1)
+  ),
+  "/",
+  nrow(
+    Type2_cohort %>%
+      filter(progressed == 1)
+  ),
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 1)
+  )/ nrow(
+   Type2_cohort %>%
+      filter(progressed == 1)
+  ),
+  "%"
+))
+
 ```
 
 ```{r Graphing Model Distributions - LEGACY}
