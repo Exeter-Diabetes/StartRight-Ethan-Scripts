@@ -666,12 +666,13 @@ lines(roc_data$model_clinF, glm.fit$fitted.values)
 (roc = roc(roc_data$Multi_Antibody_Positive, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
 
 coords(roc, x='best')
+```
 
-
+``` {r FlowChart Numbers}
 #> Producing Numbers and percentages for the screening flowchart:
 #>  - To use this section, change the following threshold to a value of interest
 #>  - Previously used thresholds: 0.005 (bad), 0.018 (good), 0.05 (best), 0.071 (ROC), 0.1
-threshold = 0.071
+threshold = 0.1
 
 print(paste(
   "Newly Diagnosed n =",
@@ -831,7 +832,138 @@ print(paste(
   "%"
 ))
 
+#> THIS SECTION USED FOR ANGUS" EXPERIMENTAL POSITIVE PREDICTIVE VALUE FLOWCHART
+threshold = 0.1 # Seting Threshold for quick code running
+
+print(paste(
+  "# Low Risk antibody positive patients",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF < threshold & Antibody_Positive == 1)
+  ),
+  "/",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF < threshold)
+  ),
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF < threshold & Antibody_Positive == 1)
+  )/ nrow(
+   Type2_cohort %>%
+      filter(model_clinF < threshold)
+  ),
+  "%"
+))
+
+print(paste(
+  "# Low Risk antibody negative patients",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF < threshold & Antibody_Positive == 0)
+  ),
+  "/",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF < threshold)
+  ),
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF < threshold & Antibody_Positive == 0)
+  )/ nrow(
+   Type2_cohort %>%
+      filter(model_clinF < threshold)
+  ),
+  "%"
+))
+
+print(paste(
+  "# High Risk antibody positive progression stats",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 1)
+  ),
+  "/",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold& Antibody_Positive == 1)
+  ),
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 1)
+  )/ nrow(
+   Type2_cohort %>%
+      filter(model_clinF >= threshold& Antibody_Positive == 1)
+  ),
+  "%"
+))
+
+print(paste(
+  "# High Risk antibody negative progression stats",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 0 & progressed == 1)
+  ),
+  "/",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold& Antibody_Positive == 0)
+  ),
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF >= threshold & Antibody_Positive == 0 & progressed == 1)
+  )/ nrow(
+   Type2_cohort %>%
+      filter(model_clinF >= threshold& Antibody_Positive == 0)
+  ),
+  "%"
+))
+
+print(paste(
+  "# Low Risk antibody Positive progression stats",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF < threshold & Antibody_Positive == 1 & progressed == 1)
+  ),
+  "/",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF < threshold& Antibody_Positive == 1)
+  ),
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF < threshold & Antibody_Positive == 1 & progressed == 1)
+  )/ nrow(
+   Type2_cohort %>%
+      filter(model_clinF < threshold& Antibody_Positive == 1)
+  ),
+  "%"
+))
+
+print(paste(
+  "# Low Risk antibody negative progression stats",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF < threshold & Antibody_Positive == 0 & progressed == 1)
+  ),
+  "/",
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF < threshold& Antibody_Positive == 0)
+  ),
+  nrow(
+    Type2_cohort %>%
+      filter(model_clinF < threshold & Antibody_Positive == 0 & progressed == 1)
+  )/ nrow(
+   Type2_cohort %>%
+      filter(model_clinF < threshold& Antibody_Positive == 0)
+  ),
+  "%"
+))
+
 ```
+
+
 
 ```{r Graphing Model Distributions - LEGACY}
 
