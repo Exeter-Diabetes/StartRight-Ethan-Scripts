@@ -69,7 +69,11 @@ my_data$Number_Antibodies = rowSums(my_data[,c("GAD_status", "IA2_status", "ZNT_
 my_data = my_data %>%
   mutate(antibodies_tested = ifelse(!is.na(GAD_status) | !is.na(IA2_status) | !is.na(ZNT_status), 1, 0 ) )
 
-# Calibrating GRS-Scores ####
+#Creating Binary outcome if patients were at least 1 antibody positive
+my_data = my_data %>%
+  mutate(Antibody_Positive = ifelse(Number_Antibodies >= 1, 1, 0))
+
+#> Calibrating GRS-Scores
 #Creating Type-1 enriched cohort
 type_1_control_cohort = my_data %>%
   filter(Insulin == "Yes" & Number_Antibodies >= 2 & Type_of_diabetes == "Type 1") %>%
@@ -79,6 +83,7 @@ type_1_control_cohort = my_data %>%
 my_data$Calibrated_GRS_Centiles = pnorm(my_data$SCORE, mean = mean(type_1_control_cohort$SCORE), sd = sd(type_1_control_cohort$SCORE))
 
 #Calculating Time To Insulin - Date_of_diagnosis until Date_continuous insulin
+# - Slightly problematic as only 134 patients have data for Date_continuous_insulin
 my_data = my_data %>%
   mutate(Time_to_insulin = difftime(
     as.Date(Date_continuous_insulin, "%d-%b-%y"),
@@ -90,125 +95,223 @@ my_data = my_data %>%
 
 # Calculating Duration of Diabetes - Date of diagnosis until final clinic date = YEARS
 my_data = my_data %>%
-  mutate(Duration_diabetes = as.numeric(
-    difftime(
-      as.Date(V3Date_Contacted, "%d/%m/%Y"),
-      as.Date(DateofDiagnosis, "%d-%b-%y"),
-      units = "weeks"
-    )/52
+  mutate(Duration_diabetes = ifelse(
+    !is.na(V3Date_Contacted), 
+    as.numeric(
+      difftime(
+        as.Date(V3Date_Contacted, "%d/%m/%Y"),
+        as.Date(DateofDiagnosis, "%d-%b-%y"),
+        units = "weeks"
+      )/52
+    ),
+    as.numeric(
+      difftime(
+        as.Date(V2Date_Contacted, "%d/%m/%Y"),
+        as.Date(DateofDiagnosis, "%d-%b-%y"),
+        units = "weeks"
+      )/52
+    ))
   )
+
+#> UNCOMMENT the following line to calculate Median duration of Diabetes = 2.5 years:
+# median(my_data$Duration_diabetes, na.rm = TRUE)
+
+# Calculating Median follow-up time from study
+my_data = my_data %>%
+  mutate(Duration_followup = ifelse(
+    !is.na(V3Date_Contacted), 
+    as.numeric(
+      difftime(
+        as.Date(V3Date_Contacted, "%d/%m/%Y"),
+        as.Date(Date_Visit, "%d-%b-%y"),
+        units = "weeks"
+      )/52
+    ),
+    as.numeric(
+      difftime(
+        as.Date(V2Date_Contacted, "%d/%m/%Y"),
+        as.Date(Date_Visit, "%d-%b-%y"),
+        units = "weeks"
+      )/52
+    ))
   )
+
+#> UNCOMMENT the following line to calculate Median duration of follow up = 2.1 years:
+# median(my_data$Duration_followup, na.rm = TRUE)
 ```
 
+Models Section:
+This section generates and applies models that were previously developed. Although there are 7 models applied to this study, only 3 were included for the final abstract submission and presentation for Diabetes UK.
 
-``` {r Generating Model Probabilities}
-# Clin F Model = 37.94 + (-5.09 * log(age at diagnosis)) + (-6.34 * log(BMI))
-# Clin F + GAD Model = 34.8057844720 + (-4.801441792 * log (Age at diagnosis)) + (-5.980577792 * log(BMI)) + (2.937107976 * GADA)
-# Clin F + IA2 Model = 37.26905033 + (3.194096 * IA2† ) + (-5.047657308 * Log(Age)) + (-6.287258808 * Log(BMI))
-# Clin F + Antibodies (ZNT8/IA2) = 33.49649577 + (-4.665598345 * Log(Age)) + (-5.81137397 * Log(BMI)) + (3.082366 * AntiStatus1‡) + (3.494462 * AntiStatus2‡) + (4.350717 * AntiStatus3‡)
-# Clin F + Anti + GRS = 21.57649882 + (-4.086215772 * log(Age)) + (-5.096252172 * log(BMI)) + (2.702010666 * [GAD POSITIVE ONLY 1 OR 0]) + (3.063255174 * [IA2 POSITIVE ONLY 1 OR 0]) + (3.813850704 * [BOTH GAD AND IA2 POSITIVE 1 OR 0]) + (30.11052 * GRS)
-# Clin F + GRS Model = 24.46138054 + (-4.443506884 * Log(Age)) + (-5.534741384 *Log(BMI)) + (33.93968* T1D GRS)
-# CLin F + Lipids = 9.0034272  - (0.1915482*BMI) – (0.1686227*age at diagnosis) + (0.3026012 if female) – (0.2269216*cholesterol) + (1.540850*HDL) – (0.2784059*triglycerides)
+The models were taken from a previous study (found in Supplemental Material):
+Lynam A, McDonald T, Hill A, Dennis J, Oram R, Pearson E, et al. Development and validation of multivariable clinical diagnostic models to identify type 1 diabetes requiring rapid insulin therapy in adults aged 18–50 years [Internet]. BMJ Open. British Medical Journal Publishing Group; 2019 [cited 2023Apr12]. Available from: https://bmjopen.bmj.com/content/9/9/e031586 
 
+The models investigated that were INCLUDED in the presentation and abtract are as follows:
+- Clinical Features Model:
+  - = 37.94 + (-5.09 * log(age at diagnosis)) + (-6.34 * log(BMI))
 
-my_data = my_data %>% # First Model: Clinical Features alone (Age + BMI)
-  mutate( logOR_clinF = 37.94 + (-5.09*log(AgeatDiagnosis)) + (-6.34 * log(BMI)) )
+- Clinical Features + Anti Model:
+  - = 33.49649577 + (-4.665598345 * Log(Age)) + (-5.81137397 * Log(BMI)) + (3.082366 * AntiStatus1‡) + (3.494462 * AntiStatus2‡) + (4.350717 * AntiStatus3‡)
+  - ‡where‡: AntiStatus1 = GAD +ve only, AntiStatus2 = IA-2 +ve only, AntiStatus3 = Both GADA and IA-2 +ve
 
-my_data = my_data %>% # Second Model: ClinF and GAD (Age, BMI, GAD)
-  mutate( logOR_clinF_GAD = 34.8057844720 + (-4.801441792 * log (AgeatDiagnosis)) + (-5.980577792 * log(BMI)) + (2.937107976 * GAD_status))
+- Clinical Features + Anti + GRS Model:
+  - = 21.57649882 + (-4.086215772 * log(Age)) + (-5.096252172 * log(BMI)) + (2.702010666 * AntiStatus1‡) + (3.063255174 * AntiStatus2‡) + (3.813850704 * AntiStatus3‡) + (30.11052 * GRS)
+  - ‡where‡: AntiStatus1 = GAD +ve only, AntiStatus2 = IA-2 +ve only, AntiStatus3 = Both GADA and IA-2 +ve
 
-my_data = my_data %>% # Third Model: ClinF and IA2 (Age, BMI, IA2)
-  mutate( logOR_clinF_IA2 = 37.26905033 + (3.194096 * IA2_status ) + (-5.047657308 * log(AgeatDiagnosis)) + (-6.287258808 * log(BMI)))
-  
-my_data = my_data %>% # Fourth Model: ClinF and Antibodies (Age, BMI, GAD, IA2)
-  mutate( logOR_clinF_Antibodies = 33.49649577 +
+The models investigated that were NOT INCLUDED in the presentation and abtract are as follows:
+- Clinical Features + GAD Model
+  - = 34.8057844720 + (-4.801441792 * log (Age at diagnosis)) + (-5.980577792 * log(BMI)) + (2.937107976 * GADA)
+
+- Clinical Features + IA2 Model
+  - = 37.26905033 + (3.194096 * IA2† ) + (-5.047657308 * Log(Age)) + (-6.287258808 * Log(BMI))
+
+- Clinical Features + GRS Model
+  - = 24.46138054 + (-4.443506884 * Log(Age)) + (-5.534741384 * Log(BMI)) + (33.93968* T1D GRS)
+
+- Clinical Features + Lipids Model
+  - = 9.0034272  - (0.1915482 * BMI) – (0.1686227 * age at diagnosis) + (0.3026012 if female) – (0.2269216 * cholesterol) + (1.540850 * HDL) – (0.2784059 * triglycerides)
+
+``` {r Generating Model LogOdds}
+#> This section is split into two sub-sections
+#>  - The first subsection is reserved for models that WERE INCLUDED
+#>  - The second subsection is reserved for models NOT INCLUDED
+
+my_data = my_data %>% 
+  mutate(
+    logOR_clinF = 37.94 +
+      (-5.09*log(AgeatDiagnosis)) +
+      (-6.34 * log(BMI)) 
+  ) %>% # First Model: Clinical Features alone (Age + BMI)
+  mutate( 
+    logOR_clinF_Antibodies = 33.49649577 +
             (-4.665598345 * log(AgeatDiagnosis)) +
             (-5.81137397 * log(BMI)) +
             (3.082366 * GAD_status) +
             (3.494462 * IA2_status) +
             (4.350717 * ifelse(Number_Antibodies >= 2, 1, 0))
-  )
-
-my_data = my_data %>% # Fifth Model: ClinF + Anti + GRS (Age, BMI, GAD, IA2, GRS)
-  mutate( logOR_clinF_antiGRS = 21.57649882 +
+  ) %>% # Fourth Model: ClinF and Antibodies (Age, BMI, GAD, IA2)
+  mutate(
+    logOR_clinF_antiGRS = 21.57649882 +
             (-4.086215772 * log(AgeatDiagnosis)) +
             (-5.096252172 * log(BMI)) +
             (2.702010666 * GAD_status) +
             (3.063255174 * IA2_status) +
             (3.813850704 * ifelse(Number_Antibodies >= 2, 1, 0)) +
             (30.11052 * GRS)
-  )
+  ) # Fifth Model: ClinF + Anti + GRS (Age, BMI, GAD, IA2, GRS)
+  
 
-my_data = my_data %>% # Sixth Model: ClinF + GRS
-  mutate( logOR_clinF_GRS = 24.46138054 
-          + (-4.443506884 * log(AgeatDiagnosis)) 
-          + (-5.534741384 *log(BMI)) 
-          + (33.93968* GRS)
-        )
-
-my_data$Gender
-
+#> This is the start of the second section for Models that WERE NOT INCLUDED  
 my_data = my_data %>%
-  mutate( logOR_clinF_Lipids = 9.0034272
-          - (0.1915482*BMI) 
-          - (0.1686227* AgeatDiagnosis) 
-          + (0.3026012 * ifelse(Gender == "Female", 1, 0)) 
-          - (0.2269216*Cholesterol_at_diag) 
-          + (1.540850*HDL_at_diag) 
-          - (0.2784059*Triglycerides_at_diag)
-      )
-
+  mutate(
+    logOR_clinF_GAD = 34.8057844720 +
+      (-4.801441792 * log (AgeatDiagnosis)) +
+      (-5.980577792 * log(BMI)) +
+      (2.937107976 * GAD_status)
+  ) %>% # Second Model: ClinF and GAD (Age, BMI, GAD)
+  mutate(
+    logOR_clinF_IA2 = 37.26905033 +
+      (3.194096 * IA2_status ) +
+      (-5.047657308 * log(AgeatDiagnosis)) +
+      (-6.287258808 * log(BMI))
+  ) %>% # Third Model: ClinF and IA2 (Age, BMI, IA2)
+  mutate(
+    logOR_clinF_GRS = 24.46138054 +
+      (-4.443506884 * log(AgeatDiagnosis)) +
+      (-5.534741384 *log(BMI)) +
+      (33.93968* GRS)
+  ) %>% # Sixth Model: ClinF + GRS
+  mutate(
+    logOR_clinF_Lipids = 9.0034272 -
+      (0.1915482*BMI) -
+      (0.1686227* AgeatDiagnosis) +
+      (0.3026012 * ifelse(Gender == "Female", 1, 0)) -
+      (0.2269216*Cholesterol_at_diag) +
+      (1.540850*HDL_at_diag) -
+      (0.2784059*Triglycerides_at_diag)
+  ) # Seventh Model: ClinF + Lipids
 ```
 
-``` {r Converting logOdds Ratio}
-# exp(LogOR) / (1 + exp(LogOR)
-
+``` {r Calculating Model Probabilities from logOdds Ratio}
+#> To calculate model probability from the previous LogOdds, the following formula must be applied:
+#>  - exp(LogOR) / (1 + exp(LogOR)
 my_data = my_data %>%
-  mutate(model_clinF = exp(logOR_clinF) / (1 + exp(logOR_clinF)))
-
-my_data = my_data %>%
-  mutate(model_clinF_GAD = exp(logOR_clinF_GAD) / (1 + exp(logOR_clinF_GAD)))
-
-my_data = my_data %>%
-  mutate(model_clinF_IA2 = exp(logOR_clinF_IA2) / (1 + exp(logOR_clinF_IA2)))
-
-my_data = my_data %>%
-  mutate(model_clinF_Anti = exp(logOR_clinF_Antibodies) / (1 + exp(logOR_clinF_Antibodies)))
-
-my_data = my_data %>%
-  mutate(model_clinF_AntiGRS = exp(logOR_clinF_antiGRS) / (1 + exp(logOR_clinF_antiGRS)))
-
-my_data = my_data %>%
-  mutate(model_clinF_GRS = exp(logOR_clinF_GRS) / (1 + exp(logOR_clinF_GRS)))
-
-my_data = my_data %>%
+  mutate(model_clinF = exp(logOR_clinF) / (1 + exp(logOR_clinF))) %>%
+  mutate(model_clinF_GAD = exp(logOR_clinF_GAD) / (1 + exp(logOR_clinF_GAD))) %>%
+  mutate(model_clinF_IA2 = exp(logOR_clinF_IA2) / (1 + exp(logOR_clinF_IA2))) %>%
+  mutate(model_clinF_Anti = exp(logOR_clinF_Antibodies) / (1 + exp(logOR_clinF_Antibodies))) %>%
+  mutate(model_clinF_AntiGRS = exp(logOR_clinF_antiGRS) / (1 + exp(logOR_clinF_antiGRS))) %>%
+  mutate(model_clinF_GRS = exp(logOR_clinF_GRS) / (1 + exp(logOR_clinF_GRS))) %>%
   mutate(model_clinF_Lipids = exp(logOR_clinF_Lipids) / (1 + exp(logOR_clinF_Lipids)))
 ```
 
-``` {r Type-2 Cohort building}
-# Cohort = not initially treated with insulin
+Non-Insulin Cohort Building
+
+This following section is where the initially non-insulin treated cohort is created.
+ - Patients who are Initially treated != (not as) Insulin
+ - Removing patients who have Date continuous Insulin within 2 weeks of their Diagnosis
+
+
+
+``` {r Non-Insulin Cohort Building}
+#> Non-Insulin cohort referred to as "Type2_cohort" for remainder of script
+
+#Type_2 = any patient initially NOT treated with Insulin
 Type2_cohort = my_data %>%
-  filter(Initial_diabetes_Insulin != "Insulin" & Insulin != "Yes")
+  filter(Initial_diabetes_Insulin != "Insulin")
 
-#> Creating binary outcome to see if patients progressed
-#> Progression = Visit2 or Visit3 insulin, and more than 1 week time to Insulin
-#> Ensure anyone with Time_to_insulin variable is at least 1 week
-#>  - Not super important because only 3 people have Time_to_insulin data
+# Removing those who have a time_to_insulin of less than 2 weeks
 Type2_cohort = Type2_cohort %>%
-  mutate(progressed = ifelse((V3Insulin == "Yes" | V2Insulin == "Yes"), 1, 0)) %>% # Calculating progressed
-  mutate(progressed = ifelse(!is.na(Time_to_insulin) & Time_to_insulin <= 1, 0, progressed) )# Ensure at least 1 week Time_to_insulin
+  filter(is.na(Time_to_insulin) | Time_to_insulin > 2)
 
-#> Creating Binary outcome if patients were atleast 1 antibody positive
+# Filter patients with Visit 1 positive insulin, where visit 1 is >= 2 weeks from diagnosis
 Type2_cohort = Type2_cohort %>%
-  mutate(Antibody_Positive = ifelse(Number_Antibodies >= 1, 1, 0))
+  filter(as.numeric(
+      difftime(
+        as.Date(Date_Visit, "%d-%b-%y"),
+        as.Date(DateofDiagnosis, "%d-%b-%y"),
+        units = "weeks"
+      )) > 2 | Insulin != "Yes"
+  ) 
+
+#> CREATING PROGRESSION OUTCOME:
+#>  - Binary outcome if patients progressed to Insulin or Not
+#>  - If Insulin == "Yes", patients have progressed to Insulin on Visit 1
+#>  - If V3Insulin == "Yes", patients have progressed by the end of the study
+#>  - If there is no available data for V3, Use V2Insulin
+Type2_cohort = Type2_cohort %>%
+  mutate(progressed = ifelse( # If on Insulin by study recruitment, progressed
+    Insulin == "Yes",
+    1,
+    ifelse(
+      V3Insulin == "Yes", # If on Insulin by Final Visit (V3) recruitment, progressed
+      1,
+      ifelse(
+        V2Insulin == "Yes", # If no data on V3, if Insulin by V2, progressed
+        1,
+        0
+      )
+    )
+  ))
+
+#> UNCOMMENT FOLLOWING LINE: See total number of progressed patients = 141
+# nrow(Type2_cohort %>% filter(progressed == 1))
+# nrow(Type2_cohort %>% filter(progressed == 0))
+
+#> UNCOMMENT FOLLOWING LINES: See total number of progressed patients who had model outcomes = 
+# nrow(Type2_cohort %>% filter(progressed == 1 & !is.na(model_clinF)))
+# nrow(Type2_cohort %>% filter(progressed == 1 & !is.na(model_clinF_Anti)))
+# nrow(Type2_cohort %>% filter(progressed == 1 & !is.na(model_clinF_AntiGRS)))
+# nrow(Type2_cohort %>% filter(progressed == 1 & !is.na(model_clinF) & !is.na(model_clinF_Anti) & !is.na(model_clinF_AntiGRS)))
+
+#> UNCOMMENT FOLLOWING LINES: See total number of progressed patients who had model outcomes = 
+# nrow(Type2_cohort %>% filter(progressed == 0 & !is.na(model_clinF)))
+# nrow(Type2_cohort %>% filter(progressed == 0 & !is.na(model_clinF_Anti)))
+# nrow(Type2_cohort %>% filter(progressed == 0 & !is.na(model_clinF_AntiGRS)))
+# nrow(Type2_cohort %>% filter(progressed == 0 & !is.na(model_clinF) & !is.na(model_clinF_Anti) & !is.na(model_clinF_AntiGRS)))
 
 # Looking at Cohort
-View(Type2_cohort)
-
-Type2_cohort %>%
-  select(Insulin, V2Insulin, V3Insulin, Time_to_insulin, Date_continuous_insulin, progressed)
-
-
+# View(Type2_cohort)
 ```
 
 ## Data Analysis
@@ -218,9 +321,7 @@ Type2_cohort %>%
 table = print(
   CreateTableOne(
     data=Type2_cohort,
-    vars = c("BMI", "AgeatDiagnosis", "GRS", "HbA1c_at_diagnosis", "model_clinF",
-             "model_clinF_GAD", "model_clinF_IA2", "model_clinF_Anti",
-             "model_clinF_AntiGRS", "Number_Antibodies", "Duration_diabetes"),
+    vars = c("BMI", "AgeatDiagnosis", "GRS", "HbA1c_at_diagnosis"),
     strata = "progressed"
   ),
   test = FALSE,
@@ -235,10 +336,13 @@ write.csv(table, file = "testTable.csv")
 #> OR open .csv in Excel and copy paste across
 
 #> Calculating How many were single/double antibody positive/negative
+#> To use this section:
+#>  - change progressed == either 1 or 0 to select different cohorts
+#>  - change number_antibodies >= 2, == 1, or >=1 for different descriptives
 nrow(
   Type2_cohort %>%
     filter(progressed == 0) %>%
-    filter(Number_Antibodies  >= 2)
+    filter(Number_Antibodies == 1)
 )
 
 ```
@@ -246,34 +350,26 @@ nrow(
 ### Models Section
 
 ``` {r Creating ROC_DATA dataframe for ROC Cohort}
+# Creating a new dataframe to work with cohort that has ALL Model outcomes
 roc_data = Type2_cohort %>%
   filter(!is.na(progressed) &!is.na(model_clinF) & !is.na(model_clinF_Anti) &
-           !is.na(model_clinF_AntiGRS) ) 
-roc_data = roc_data %>%
+           !is.na(model_clinF_AntiGRS) ) %>%
   mutate(Multi_Antibody_Positive = ifelse(Number_Antibodies >= 2, 1, 0))
-#> REMOVED: & !is.na(model_clinF_GAD) & !is.na(model_clinF_IA2) & !is.na(model_clinF_GRS) & !is.na(model_clinF_Lipids) )
-
-# nrow(roc_data %>% filter(progressed == 1))
 ```
 
 ``` {r 1: Clinical Features Model}
 #> This section dedicated to the Clin F slide
-#> Incorporates: ROC, Calibration, and ggViolin
-Type2_cohort$model_clinF
+#> Incorporates: ROC and ggBoxPlot
+#>  - To view/generate Calibration plot, please proceed to Chunk 18, titled: "Model Calibration Plots by Deciles"
 
-# Distribution: ggViolin
-ggplot(Type2_cohort %>%
-         mutate(progressed = ifelse(progressed == 0,
-                                    "Did not Progress",
-                                    "Progressed")
-                )
-        ,aes(x=as.factor(progressed),y=model_clinF)
-       ) + 
-  geom_violin() +
-  stat_summary(fun.y=mean, geom="point", shape=23, size=2) +
-  labs(title = "Clinical Features Model Distribution") +
-  ylab("Clinical Features Model Probability") +
-  xlab("Outcomes")
+# ROC AUC
+glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF, family = binomial())
+plot.new()
+lines(roc_data$model_clinF, glm.fit$fitted.values)
+
+(roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
+
+coords(roc, x='best')
 
 #Distribution 2.0: Boxplot
 ggplot(Type2_cohort %>%
@@ -287,17 +383,7 @@ ggplot(Type2_cohort %>%
   ylab("Clinical Features Model Probability") +
   xlab("Progression to Insulin <= 3 years")
 
-# ROC AUC
-glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF, family = binomial())
-plot.new()
-lines(roc_data$model_clinF, glm.fit$fitted.values)
 
-(roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
-
-coords(roc, x='best')
-
-# Calibration
-val.prob(roc_data$model_clinF, roc_data$progressed)
 
 ```
 
@@ -457,11 +543,6 @@ lines(roc_data$model_clinF_Lipids, glm.fit$fitted.values)
 
 coords(roc, x='best')
 
-# Calibration
-val.prob(roc_data$model_clinF, roc_data$progressed)
-
-nrow(Type2_cohort)
-
 ```
 
 
@@ -513,6 +594,119 @@ nrow(
 )
 ```
 
+``` {r Model Calibration Plots by Deciles}
+#> To Use following section:
+#>  - Reassign model_probabilities variable to your chosen Model Probs
+#>  - Change the labs( title = "") on line 544 to your title
+model_probabilities = Type2_cohort$model_clinF_AntiGRS
+
+quantiles <- quantile(model_probabilities, probs = seq(0, 1, by = 0.1), na.rm = TRUE)
+quantiles[1] <- 0.99 * quantiles[1]
+quantiles[length(quantiles)] <- 1.1 * quantiles[length(quantiles)]
+processed_quantiles <- cut(
+  model_probabilities,
+  breaks = quantiles,
+  include_lowest = TRUE
+)
+processed_quantiles <- data.frame(y = Type2_cohort$progressed, pred = model_probabilities, dec = processed_quantiles) %>%
+  group_by(dec) %>%
+  mutate(prob_obs = sum(y) / n(),
+    obs = sum(y),
+    n_group = n(),
+    mnpred = mean(pred),
+    lower = lapply(sum(y), prop.test, n = n()),
+    upper = sapply(lower, function(x) x$conf.int[2]),
+    lower = sapply(lower, function(x) x$conf.int[1]))
+## plot
+ggplot(processed_quantiles, aes(x = mnpred, y = prob_obs)) +
+  geom_point() +
+  xlab("Mean predicted probability in each decile") +
+  ylab("Observed probability in each decile") +
+  labs(title = "Clin F + Anti + GRS Model Cal. Plot") +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  ylim(c(0, 1)) + xlim(c(0, 1)) +
+  geom_errorbar(aes(ymin = lower, ymax = upper))
+
+```
+
+``` {r Antibodies Interpretation: Applying Models to Anti+ Cohort}
+#> This section meant to test whether antibodies model offers anything after patients received an antibody result
+#> ROC curve and box plot WITHIN antibody positive patients
+Type2_cohort$model_clinF_Anti
+Type2_cohort$Antibody_Positive
+
+#Distribution 2.0: Boxplot
+ggplot(
+  Type2_cohort %>% filter(Antibody_Positive == 1),
+  aes(as.factor(progressed),
+  model_clinF_AntiGRS
+)) +
+  geom_boxplot() +
+  xlab("Progressed (0=False)") +
+  ylab("Clin F + Antibodies Model Probabilities") +
+  ylim(c(0,1))
+
+#> ROC AUC
+# Creating temporary dataframe for this special section - not to mess with other Roc Data and associated ROC curves
+temp_roc_data = roc_data %>%
+  filter(Antibody_Positive == 1)
+
+current_model = temp_roc_data$model_clinF_AntiGRS
+
+glm.fit = glm(temp_roc_data$progressed ~ current_model, family = binomial())
+plot.new()
+lines(current_model, glm.fit$fitted.values)
+
+(roc = roc(temp_roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
+
+coords(roc, x='best')
+
+remove(temp_roc_data)
+
+```
+
+``` {r 2nd Flowchart: Applying Antibodies Model to FlowChart}
+#> This Section is designed to calculate descriptive statistics for each group of the cohort
+#>  - intending to see how applying Antibodies model discriminates those who progress vs those who dont
+#>  - need to apply model to all groups: High | low risk & Antibody+ | Antibody-
+
+screening_threshold = 0.05
+antibody_threshold = 0.05
+antibody_status = 1
+risk = "low"
+
+
+nrow(
+  Type2_cohort %>%
+    filter(if (risk == "high") model_clinF >= screening_threshold else model_clinF < screening_threshold) %>%
+    filter(Antibody_Positive == antibody_status)
+)
+
+nrow(
+  Type2_cohort %>%
+    filter(if (risk == "high") model_clinF >= screening_threshold else model_clinF < screening_threshold) %>%
+    filter(Antibody_Positive == antibody_status) %>%
+    filter(model_clinF_Anti >= antibody_threshold)
+)
+
+nrow(
+   Type2_cohort %>%
+    filter(if (risk == "high") model_clinF >= screening_threshold else model_clinF < screening_threshold) %>%
+    filter(Antibody_Positive == antibody_status) %>%
+    filter(progressed == 1)
+)
+
+nrow(
+   Type2_cohort %>%
+    filter(if (risk == "high") model_clinF >= screening_threshold else model_clinF < screening_threshold) %>%
+    filter(Antibody_Positive == antibody_status) %>%
+    filter(progressed == 1) %>%
+    filter(model_clinF_Anti >= antibody_threshold) 
+)
+
+# TEMP TEST
+```
+
 ``` {r Model Calibrations by Deciles}
 #> Changes - Don't graph according to model probability, but decile of population
 #> Can do this using ntile() function
@@ -524,6 +718,21 @@ Type2_cohort = Type2_cohort %>%
   mutate(model_clinF_percentiles = ntile(model_clinF, 10)) %>%
   mutate(model_clinF_Anti_percentiles = ntile(model_clinF_Anti, 10)) %>%
   mutate(model_clinF_AntiGRS_percentiles = ntile(model_clinF_AntiGRS, 10))
+
+table(Type2_cohort$model_clinF_percentiles)
+
+Type2_cohort %>%
+  filter(model_clinF_percentiles == 5) %>%
+  select(model_clinF) %>%
+  describe()
+
+nrow(Type2_cohort %>%
+  filter(model_clinF_percentiles == 5 & progressed == 1))
+  
+
+nrow(Type2_cohort %>%
+  filter(model_clinF_percentiles == 0.2))
+
 
 # Need to initialize new column so loop works
 Type2_cohort$model_clinF_percentiles_results = NA
