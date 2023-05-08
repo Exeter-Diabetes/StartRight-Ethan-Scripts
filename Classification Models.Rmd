@@ -21,7 +21,7 @@ library(rms) # Val.prob mainly
 ```
 
 ``` {r ImportingData}
-filepath = 'startight Aug 22 comma separated.csv'
+filepath = 'startight Aug 22 comma separated.csv' # This must be the relative or absolute filepath pointing to the Startright August 2022 dataset
 my_data <- import(filepath)
 
 #> View(my_data)
