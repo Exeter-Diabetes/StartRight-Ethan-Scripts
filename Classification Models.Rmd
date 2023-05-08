@@ -18,11 +18,10 @@ library (rsq) # Used for R-squared values
 library(ggplot2) # Advanced Graphs
 library(tableone) # Nice descriptives for tables
 library(rms) # Val.prob mainly
-# library(val.prob) Out dated for this version of R - useful for calibration 
 ```
 
 ``` {r ImportingData}
-filepath = 'startight Aug 22 comma separated.csv'
+filepath = 'startight Aug 22 comma separated.csv' # This must be the relative or absolute filepath pointing to the Startright August 2022 dataset
 my_data <- import(filepath)
 
 #> View(my_data)
@@ -53,25 +52,24 @@ my_data = my_data %>%
   mutate(IA2_status = ifelse(IA2 == 'negative', 0, NA)) %>%
   mutate(IA2_status = ifelse(grepl("[0-9]",IA2) & as.numeric(IA2) >= 7.5, 1, IA2_status))
 
-#New column ZNT8_Status will default to NA, and if negative = 0, positive = 1
-my_data = my_data %>%
-  mutate(ZNT_status = ifelse(ZNT8 == 'negative', 0, NA)) %>%
-  mutate(ZNT_status = ifelse(grepl("[0-9]",ZNT8) & as.numeric(ZNT8) >= 65, 1, ZNT_status))
-
 #Filling in BMI for missing values
 my_data = my_data %>%
   mutate(BMI = ifelse(is.na(BMI), Weight / (Height^2), BMI))
 
 #Creating column for how many antibodies a patient has, sum()
-my_data$Number_Antibodies = rowSums(my_data[,c("GAD_status", "IA2_status", "ZNT_status")], na.rm=TRUE)
+my_data$Number_Antibodies = rowSums(my_data[,c("GAD_status", "IA2_status")], na.rm=TRUE)
 
 #Creating binary column for if patients received any antibody testing
 my_data = my_data %>%
-  mutate(antibodies_tested = ifelse(!is.na(GAD_status) | !is.na(IA2_status) | !is.na(ZNT_status), 1, 0 ) )
+  mutate(antibodies_tested = ifelse(!is.na(GAD_status) | !is.na(IA2_status), 1, 0 ) )
 
 #Creating Binary outcome if patients were at least 1 antibody positive
 my_data = my_data %>%
   mutate(Antibody_Positive = ifelse(Number_Antibodies >= 1, 1, 0))
+
+#Creating Binary outcome if patients were MULTI antibody positive
+my_data = my_data %>%
+  mutate(Multi_Antibody_Positive = ifelse(Number_Antibodies >= 2, 1, 0))
 
 #> Calibrating GRS-Scores
 #Creating Type-1 enriched cohort
@@ -96,52 +94,61 @@ my_data = my_data %>%
 # Calculating Duration of Diabetes - Date of diagnosis until final clinic date = YEARS
 my_data = my_data %>%
   mutate(Duration_diabetes = ifelse(
-    !is.na(V3Date_Contacted), 
+    V3Date_Contacted != "", 
     as.numeric(
       difftime(
-        as.Date(V3Date_Contacted, "%d/%m/%Y"),
+        as.Date(V3Date_Contacted, "%m/%d/%Y"),
         as.Date(DateofDiagnosis, "%d-%b-%y"),
         units = "weeks"
       )/52
     ),
     as.numeric(
       difftime(
-        as.Date(V2Date_Contacted, "%d/%m/%Y"),
+        as.Date(V2Date_Contacted, "%d-%b-%y"),
         as.Date(DateofDiagnosis, "%d-%b-%y"),
         units = "weeks"
       )/52
     ))
   )
 
-#> UNCOMMENT the following line to calculate Median duration of Diabetes = 2.5 years:
-# median(my_data$Duration_diabetes, na.rm = TRUE)
+hist(Type2_cohort$Duration_diabetes, na.rm = TRUE)
+hist(Type2_cohort$Duration_followup, na.rm = TRUE)
 
 # Calculating Median follow-up time from study
 my_data = my_data %>%
   mutate(Duration_followup = ifelse(
-    !is.na(V3Date_Contacted), 
+    V3Date_Contacted != "", 
     as.numeric(
       difftime(
-        as.Date(V3Date_Contacted, "%d/%m/%Y"),
+        as.Date(V3Date_Contacted, "%m/%d/%Y"),
         as.Date(Date_Visit, "%d-%b-%y"),
         units = "weeks"
       )/52
     ),
     as.numeric(
       difftime(
-        as.Date(V2Date_Contacted, "%d/%m/%Y"),
+        as.Date(V2Date_Contacted, "%d-%b-%y"),
         as.Date(Date_Visit, "%d-%b-%y"),
         units = "weeks"
       )/52
     ))
   )
 
-#> UNCOMMENT the following line to calculate Median duration of follow up = 2.1 years:
-# median(my_data$Duration_followup, na.rm = TRUE)
+# Calculate Median time from diagnosis to recruitment
+my_data = my_data %>%
+  mutate(Duration_until_recruitment =
+           as.numeric(
+             difftime(
+                as.Date(Date_Visit, "%d-%b-%y"),
+                as.Date(DateofDiagnosis, "%d-%b-%y"),
+                units = "weeks"
+           )/52
+           )
+         )
 ```
 
 Models Section:
-This section generates and applies models that were previously developed. Although there are 7 models applied to this study, only 3 were included for the final abstract submission and presentation for Diabetes UK.
+This section generates and applies models that were previously developed. Although there are 7 models applied to this study, only 3 were included for the final abstract submission and presentation for Diabetes UK. To View the code, investigation and models that were NOT included, please view the "Master" branch on Github.
 
 The models were taken from a previous study (found in Supplemental Material):
 Lynam A, McDonald T, Hill A, Dennis J, Oram R, Pearson E, et al. Development and validation of multivariable clinical diagnostic models to identify type 1 diabetes requiring rapid insulin therapy in adults aged 18–50 years [Internet]. BMJ Open. British Medical Journal Publishing Group; 2019 [cited 2023Apr12]. Available from: https://bmjopen.bmj.com/content/9/9/e031586 
@@ -172,10 +179,6 @@ The models investigated that were NOT INCLUDED in the presentation and abtract a
   - = 9.0034272  - (0.1915482 * BMI) – (0.1686227 * age at diagnosis) + (0.3026012 if female) – (0.2269216 * cholesterol) + (1.540850 * HDL) – (0.2784059 * triglycerides)
 
 ``` {r Generating Model LogOdds}
-#> This section is split into two sub-sections
-#>  - The first subsection is reserved for models that WERE INCLUDED
-#>  - The second subsection is reserved for models NOT INCLUDED
-
 my_data = my_data %>% 
   mutate(
     logOR_clinF = 37.94 +
@@ -189,7 +192,7 @@ my_data = my_data %>%
             (3.082366 * GAD_status) +
             (3.494462 * IA2_status) +
             (4.350717 * ifelse(Number_Antibodies >= 2, 1, 0))
-  ) %>% # Fourth Model: ClinF and Antibodies (Age, BMI, GAD, IA2)
+  ) %>% # Second Model: ClinF and Antibodies (Age, BMI, GAD, IA2)
   mutate(
     logOR_clinF_antiGRS = 21.57649882 +
             (-4.086215772 * log(AgeatDiagnosis)) +
@@ -198,38 +201,7 @@ my_data = my_data %>%
             (3.063255174 * IA2_status) +
             (3.813850704 * ifelse(Number_Antibodies >= 2, 1, 0)) +
             (30.11052 * GRS)
-  ) # Fifth Model: ClinF + Anti + GRS (Age, BMI, GAD, IA2, GRS)
-  
-
-#> This is the start of the second section for Models that WERE NOT INCLUDED  
-my_data = my_data %>%
-  mutate(
-    logOR_clinF_GAD = 34.8057844720 +
-      (-4.801441792 * log (AgeatDiagnosis)) +
-      (-5.980577792 * log(BMI)) +
-      (2.937107976 * GAD_status)
-  ) %>% # Second Model: ClinF and GAD (Age, BMI, GAD)
-  mutate(
-    logOR_clinF_IA2 = 37.26905033 +
-      (3.194096 * IA2_status ) +
-      (-5.047657308 * log(AgeatDiagnosis)) +
-      (-6.287258808 * log(BMI))
-  ) %>% # Third Model: ClinF and IA2 (Age, BMI, IA2)
-  mutate(
-    logOR_clinF_GRS = 24.46138054 +
-      (-4.443506884 * log(AgeatDiagnosis)) +
-      (-5.534741384 *log(BMI)) +
-      (33.93968* GRS)
-  ) %>% # Sixth Model: ClinF + GRS
-  mutate(
-    logOR_clinF_Lipids = 9.0034272 -
-      (0.1915482*BMI) -
-      (0.1686227* AgeatDiagnosis) +
-      (0.3026012 * ifelse(Gender == "Female", 1, 0)) -
-      (0.2269216*Cholesterol_at_diag) +
-      (1.540850*HDL_at_diag) -
-      (0.2784059*Triglycerides_at_diag)
-  ) # Seventh Model: ClinF + Lipids
+  ) # Third Model: ClinF + Anti + GRS (Age, BMI, GAD, IA2, GRS)
 ```
 
 ``` {r Calculating Model Probabilities from logOdds Ratio}
@@ -237,12 +209,8 @@ my_data = my_data %>%
 #>  - exp(LogOR) / (1 + exp(LogOR)
 my_data = my_data %>%
   mutate(model_clinF = exp(logOR_clinF) / (1 + exp(logOR_clinF))) %>%
-  mutate(model_clinF_GAD = exp(logOR_clinF_GAD) / (1 + exp(logOR_clinF_GAD))) %>%
-  mutate(model_clinF_IA2 = exp(logOR_clinF_IA2) / (1 + exp(logOR_clinF_IA2))) %>%
   mutate(model_clinF_Anti = exp(logOR_clinF_Antibodies) / (1 + exp(logOR_clinF_Antibodies))) %>%
-  mutate(model_clinF_AntiGRS = exp(logOR_clinF_antiGRS) / (1 + exp(logOR_clinF_antiGRS))) %>%
-  mutate(model_clinF_GRS = exp(logOR_clinF_GRS) / (1 + exp(logOR_clinF_GRS))) %>%
-  mutate(model_clinF_Lipids = exp(logOR_clinF_Lipids) / (1 + exp(logOR_clinF_Lipids)))
+  mutate(model_clinF_AntiGRS = exp(logOR_clinF_antiGRS) / (1 + exp(logOR_clinF_antiGRS)))
 ```
 
 Non-Insulin Cohort Building
@@ -250,9 +218,7 @@ Non-Insulin Cohort Building
 This following section is where the initially non-insulin treated cohort is created.
  - Patients who are Initially treated != (not as) Insulin
  - Removing patients who have Date continuous Insulin within 2 weeks of their Diagnosis
-
-
-
+ 
 ``` {r Non-Insulin Cohort Building}
 #> Non-Insulin cohort referred to as "Type2_cohort" for remainder of script
 
@@ -294,6 +260,11 @@ Type2_cohort = Type2_cohort %>%
     )
   ))
 
+# Looking at Cohort
+# View(Type2_cohort)
+```
+
+``` {r Basic Descriptives for Cohort Creation Flowchart}
 #> UNCOMMENT FOLLOWING LINE: See total number of progressed patients = 141
 # nrow(Type2_cohort %>% filter(progressed == 1))
 # nrow(Type2_cohort %>% filter(progressed == 0))
@@ -310,23 +281,24 @@ Type2_cohort = Type2_cohort %>%
 # nrow(Type2_cohort %>% filter(progressed == 0 & !is.na(model_clinF_AntiGRS)))
 # nrow(Type2_cohort %>% filter(progressed == 0 & !is.na(model_clinF) & !is.na(model_clinF_Anti) & !is.na(model_clinF_AntiGRS)))
 
-# Looking at Cohort
-# View(Type2_cohort)
+#> UNCOMMENT FOLLOWING LINES: Number of participants with model data
+# nrow(Type2_cohort %>% filter(!is.na(model_clinF)))
+# nrow(Type2_cohort %>% filter(!is.na(model_clinF_Anti)))
+# nrow(Type2_cohort %>% filter(!is.na(model_clinF_AntiGRS)))
 ```
 
 ## Data Analysis
 
 ###Descriptive Statistics
 ``` {r Type-2 Cohort Baseline Table}
-table = print(
-  CreateTableOne(
+table = CreateTableOne(
     data=Type2_cohort,
-    vars = c("BMI", "AgeatDiagnosis", "GRS", "HbA1c_at_diagnosis"),
+    vars = c("BMI", "AgeatDiagnosis", "GRS", "HbA1c_at_diagnosis", "Duration_diabetes",
+             "Duration_followup", "Duration_until_recruitment"),
     strata = "progressed"
-  ),
-  test = FALSE,
-  noSpaces = TRUE
-)
+  )
+
+summary(table)
 
 write.csv(table, file = "testTable.csv")
 #> Take .CSV file and upload text to: 
@@ -342,9 +314,14 @@ write.csv(table, file = "testTable.csv")
 nrow(
   Type2_cohort %>%
     filter(progressed == 0) %>%
-    filter(Number_Antibodies == 1)
+    filter(Number_Antibodies > 1)
 )
 
+#> P-values for table
+#> To use: Switch both Type2_cohort$[variable] for variable of choice (recommended vars outlined in above table)
+ttest_normal = Type2_cohort$GRS[Type2_cohort$progressed==0]
+ttest_insulin = Type2_cohort$GRS[Type2_cohort$progressed==1]
+t.test(ttest_normal, y = ttest_insulin)
 ```
 
 ### Models Section
@@ -353,14 +330,13 @@ nrow(
 # Creating a new dataframe to work with cohort that has ALL Model outcomes
 roc_data = Type2_cohort %>%
   filter(!is.na(progressed) &!is.na(model_clinF) & !is.na(model_clinF_Anti) &
-           !is.na(model_clinF_AntiGRS) ) %>%
-  mutate(Multi_Antibody_Positive = ifelse(Number_Antibodies >= 2, 1, 0))
+           !is.na(model_clinF_AntiGRS) )
 ```
 
 ``` {r 1: Clinical Features Model}
 #> This section dedicated to the Clin F slide
 #> Incorporates: ROC and ggBoxPlot
-#>  - To view/generate Calibration plot, please proceed to Chunk 18, titled: "Model Calibration Plots by Deciles"
+#> To view/generate Calibration plot, please proceed to Chunk 12, titled: "Model Calibration Plots"
 
 # ROC AUC
 glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF, family = binomial())
@@ -369,7 +345,8 @@ lines(roc_data$model_clinF, glm.fit$fitted.values)
 
 (roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
 
-coords(roc, x='best')
+#> To View Threshold and specificity/sensitivity UNCOMMENT the following line:
+# coords(roc, x='best')
 
 #Distribution 2.0: Boxplot
 ggplot(Type2_cohort %>%
@@ -383,60 +360,22 @@ ggplot(Type2_cohort %>%
   ylab("Clinical Features Model Probability") +
   xlab("Progression to Insulin <= 3 years")
 
-
-
 ```
 
-``` {r 2: Clin F + GAD Model}
-#> This section dedicated to the Clin F + slide
-#> Incorporates: ROC, Calibration, and ggViolin
-Type2_cohort$model_clinF_GAD
-
-#Distribution 2.0: Boxplot
-ggplot(Type2_cohort, aes(as.factor(progressed), model_clinF_GAD)) +
-  geom_boxplot() +
-  xlab("Progressed (0=False)")
+``` {r 2: Clin F + GAD and IA2 Model}
+#> This section dedicated to the Clin F + Antibodies slide
+#> Incorporates: ROC and ggBoxPlot
+#> To view/generate Calibration plot, please proceed to Chunk 12, titled: "Model Calibration Plots"
 
 # ROC AUC
-glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_GAD, family = binomial())
+glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_Anti, family = binomial())
 plot.new()
-lines(roc_data$model_clinF_GAD, glm.fit$fitted.values)
+lines(roc_data$model_clinF_Anti, glm.fit$fitted.values)
 
 (roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
 
-coords(roc, x='best')
-
-# Calibration
-val.prob(roc_data$model_clinF_GAD, roc_data$progressed)
-```
-
-``` {r 3: Clin F + IA2 Model}
-#> This section dedicated to the Clin F + slide
-#> Incorporates: ROC, Calibration, and ggViolin
-Type2_cohort$model_clinF_IA2
-
-#Distribution 2.0: Boxplot
-ggplot(Type2_cohort, aes(as.factor(progressed), model_clinF_IA2)) +
-  geom_boxplot() +
-  xlab("Progressed (0=False)")
-
-# ROC AUC
-glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_IA2, family = binomial())
-plot.new()
-lines(roc_data$model_clinF_IA2, glm.fit$fitted.values)
-
-(roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
-
-coords(roc, x='best')
-
-#Calibration
-val.prob(roc_data$model_clinF_IA2, roc_data$progressed)
-```
-
-``` {r 4: Clin F + GAD and IA2 Model}
-#> This section dedicated to the Clin F + slide
-#> Incorporates: ROC, Calibration, and ggViolin
-Type2_cohort$model_clinF_Anti
+#> To View Threshold and specificity/sensitivity UNCOMMENT the following line:
+# coords(roc, x='best')
 
 #Distribution 2.0: Boxplot
 ggplot(Type2_cohort %>%
@@ -448,26 +387,22 @@ ggplot(Type2_cohort %>%
   geom_boxplot() +
   xlab("Progression to Insulin <= 3 years") +
   ylab("Clinical Features + Antibodies Model Probability")
+```
 
-# ROC AUC
-glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_Anti, family = binomial())
+``` {r 3: Clin F + Anti + GRS Model}
+#> This section dedicated to the Clin F + Antibodies + GRS slide
+#> Incorporates: ROC and ggBoxPlot
+#> To view/generate Calibration plot, please proceed to Chunk 12, titled: "Model Calibration Plots"
+
+#ROC AUC
+glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_AntiGRS, family = binomial())
 plot.new()
-lines(roc_data$model_clinF_Anti, glm.fit$fitted.values)
+lines(roc_data$model_clinF_AntiGRS, glm.fit$fitted.values)
 
 (roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
 
-coords(roc, x='best')
-
-nrow(roc_data %>% filter(progressed == 1))
-
-#Calibration
-val.prob(roc_data$model_clinF_Anti, roc_data$progressed)
-```
-
-``` {r 5: Clin F + Anti + GRS Model}
-#> This section dedicated to the Clin F + slide
-#> Incorporates: ROC, Calibration, and ggViolin
-Type2_cohort$model_clinF_AntiGRS
+#> To View Threshold and specificity/sensitivity UNCOMMENT the following line:
+# coords(roc, x='best')
 
 #Distribution 2.0: Boxplot
 ggplot(Type2_cohort %>%
@@ -479,125 +414,12 @@ ggplot(Type2_cohort %>%
   geom_boxplot() +
   xlab("Progression to Insulin <= 3 years") +
   ylab("Clinical Features + Anti + GRS Model Probability")
-
-#ROC AUC
-
-glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_AntiGRS, family = binomial())
-plot.new()
-lines(roc_data$model_clinF_AntiGRS, glm.fit$fitted.values)
-
-(roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
-
-coords(roc, x='best')
-
-
-#Calibration
-val.prob(roc_data$model_clinF_AntiGRS, roc_data$progressed)
 ```
 
-``` {r 6: Clin F + GRS Model}
-#> This section dedicated to the Clin F + GRS slide
-#> Incorporates: ROC, Calibration, and ggBox
-Type2_cohort$model_clinF_GRS
-
-#Distribution 2.0: Boxplot
-ggplot(Type2_cohort, aes(as.factor(progressed), model_clinF_GRS)) +
-  geom_boxplot() +
-  xlab("Progressed (0=False)") +
-  ylab("Clin F + GRS Model Probabilities")
-
-# ROC AUC
-glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_GRS, family = binomial())
-plot.new()
-lines(roc_data$model_clinF_GRS, glm.fit$fitted.values)
-
-(roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
-
-coords(roc, x='best')
-
-# Calibration
-val.prob(roc_data$model_clinF, roc_data$progressed)
-
-nrow(Type2_cohort)
-
-```
-
-``` {r 7: Clin F + Lipids}
-#> This section dedicated to the Clin F + GRS slide
-#> Incorporates: ROC, Calibration, and ggBox
-Type2_cohort$model_clinF_Lipids
-
-#Distribution 2.0: Boxplot
-ggplot(Type2_cohort, aes(as.factor(progressed), model_clinF_Lipids)) +
-  geom_boxplot() +
-  xlab("Progressed (0=False)") +
-  ylab("Clin F + Lipids Model Probabilities") +
-  ylim(c(0,1))
-
-# ROC AUC
-glm.fit = glm(roc_data$progressed ~ roc_data$model_clinF_Lipids, family = binomial())
-plot.new()
-lines(roc_data$model_clinF_Lipids, glm.fit$fitted.values)
-
-(roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
-
-coords(roc, x='best')
-
-```
-
-
-``` {r Investigating If Antibodies Can Identify Progression}
-#> ggBoxPlot for antibody distribution
-ggplot(Type2_cohort, aes(as.factor(progressed), Number_Antibodies)) +
-  geom_boxplot() +
-  xlab("Progressed (0=False)") +
-  ylab("Number of Positive Antibodies")
-
-
-#> AUC ROC for Antibodies to compare
-roc_data = Type2_cohort %>%
-  filter(!is.na(Number_Antibodies) )
-
-glm.fit = glm(roc_data$progressed ~ roc_data$Number_Antibodies, family = binomial())
-plot.new()
-lines(roc_data$Number_Antibodies, glm.fit$fitted.values)
-
-(roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
-
-coords(roc, x='best')
-
-```
-
-
-``` {r Investigating antibodies tested}
-#> Objective is to look at those patients who have had antibodies tested
-#> Measure and look at how ineffective general screening is, and how implementing
-#> models can overcome this inefficiency.
-
-table = print(
-  CreateTableOne(
-    data=Type2_cohort,
-    vars = c("BMI", "AgeatDiagnosis", "GRS", "HbA1c_at_diagnosis"),
-    strata = "antibodies_tested"
-  ),
-  test = FALSE,
-  noSpaces = TRUE
-)
-
-write.csv(table, file = "testTable.csv")
-
-#> Calculating How many were single/double antibody positive/negative
-nrow(
-  Type2_cohort %>%
-    filter(antibodies_tested == 1) %>%
-    filter(Number_Antibodies >= 2)
-)
-```
-
-``` {r Model Calibration Plots by Deciles}
+``` {r Model Calibration Plots}
 #> To Use following section:
 #>  - Reassign model_probabilities variable to your chosen Model Probs
-#>  - Change the labs( title = "") on line 544 to your title
+#>  - Change the labs( title = "") on line 430 to your title
 model_probabilities = Type2_cohort$model_clinF_AntiGRS
 
 quantiles <- quantile(model_probabilities, probs = seq(0, 1, by = 0.1), na.rm = TRUE)
@@ -622,234 +444,47 @@ ggplot(processed_quantiles, aes(x = mnpred, y = prob_obs)) +
   geom_point() +
   xlab("Mean predicted probability in each decile") +
   ylab("Observed probability in each decile") +
-  labs(title = "Clin F + Anti + GRS Model Cal. Plot") +
+  labs(title = "Clin F + Antibodies + GRS Model Cal. Plot") +
   geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
   ylim(c(0, 1)) + xlim(c(0, 1)) +
   geom_errorbar(aes(ymin = lower, ymax = upper))
 
 ```
 
-``` {r Antibodies Interpretation: Applying Models to Anti+ Cohort}
-#> This section meant to test whether antibodies model offers anything after patients received an antibody result
-#> ROC curve and box plot WITHIN antibody positive patients
-Type2_cohort$model_clinF_Anti
-Type2_cohort$Antibody_Positive
 
-#Distribution 2.0: Boxplot
-ggplot(
-  Type2_cohort %>% filter(Antibody_Positive == 1),
-  aes(as.factor(progressed),
-  model_clinF_AntiGRS
-)) +
-  geom_boxplot() +
-  xlab("Progressed (0=False)") +
-  ylab("Clin F + Antibodies Model Probabilities") +
-  ylim(c(0,1))
-
-#> ROC AUC
-# Creating temporary dataframe for this special section - not to mess with other Roc Data and associated ROC curves
-temp_roc_data = roc_data %>%
-  filter(Antibody_Positive == 1)
-
-current_model = temp_roc_data$model_clinF_AntiGRS
-
-glm.fit = glm(temp_roc_data$progressed ~ current_model, family = binomial())
+``` {r Antibodies predicting Progression to Insulin}
+#> This section dedicated to the Antibodies comparative slide
+# ROC
+glm.fit = glm(roc_data$progressed ~ roc_data$Number_Antibodies, family = binomial())
 plot.new()
-lines(current_model, glm.fit$fitted.values)
+lines(roc_data$Number_Antibodies, glm.fit$fitted.values)
 
-(roc = roc(temp_roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
-
-coords(roc, x='best')
-
-remove(temp_roc_data)
-
+(roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
+# coords(roc, x='best')
 ```
 
-``` {r 2nd Flowchart: Applying Antibodies Model to FlowChart}
-#> This Section is designed to calculate descriptive statistics for each group of the cohort
-#>  - intending to see how applying Antibodies model discriminates those who progress vs those who dont
-#>  - need to apply model to all groups: High | low risk & Antibody+ | Antibody-
 
-screening_threshold = 0.05
-antibody_threshold = 0.05
-antibody_status = 1
-risk = "low"
+## Clinical Application Section
 
+!!!!!       TEMPORARILY REMOVED FROM PRESENTATION PENDING FURTHER DECISION        !!!!!
+!!!!!       TEMPORARILY REMOVED FROM PRESENTATION PENDING FURTHER DECISION        !!!!!
+!!!!!       TEMPORARILY REMOVED FROM PRESENTATION PENDING FURTHER DECISION        !!!!!
 
-nrow(
-  Type2_cohort %>%
-    filter(if (risk == "high") model_clinF >= screening_threshold else model_clinF < screening_threshold) %>%
-    filter(Antibody_Positive == antibody_status)
-)
+The following section is focused around illistrating how these models can be used in a clinical context, to aid diagnosis.
+``` {r Models as Clinical Diagnostic Tools} 
+#> This section is dedicated to the The clinical tools slide:
+#>  - Identify 3 patients that are phenotypically similar, but have drastic different pathologies
 
-nrow(
-  Type2_cohort %>%
-    filter(if (risk == "high") model_clinF >= screening_threshold else model_clinF < screening_threshold) %>%
-    filter(Antibody_Positive == antibody_status) %>%
-    filter(model_clinF_Anti >= antibody_threshold)
-)
-
-nrow(
-   Type2_cohort %>%
-    filter(if (risk == "high") model_clinF >= screening_threshold else model_clinF < screening_threshold) %>%
-    filter(Antibody_Positive == antibody_status) %>%
-    filter(progressed == 1)
-)
-
-nrow(
-   Type2_cohort %>%
-    filter(if (risk == "high") model_clinF >= screening_threshold else model_clinF < screening_threshold) %>%
-    filter(Antibody_Positive == antibody_status) %>%
-    filter(progressed == 1) %>%
-    filter(model_clinF_Anti >= antibody_threshold) 
-)
-
-# TEMP TEST
-```
-
-``` {r Model Calibrations by Deciles}
-#> Changes - Don't graph according to model probability, but decile of population
-#> Can do this using ntile() function
-
-results = list()
-
-#> Generating ntiles
-Type2_cohort = Type2_cohort %>%
-  mutate(model_clinF_percentiles = ntile(model_clinF, 10)) %>%
-  mutate(model_clinF_Anti_percentiles = ntile(model_clinF_Anti, 10)) %>%
-  mutate(model_clinF_AntiGRS_percentiles = ntile(model_clinF_AntiGRS, 10))
-
-table(Type2_cohort$model_clinF_percentiles)
-
+#> True, Type-1 patient (Antibodies and Progression): SR0280
+#> Type-2 patient: SR2462
+#> False Type-1 patient (antibody, no progression): SR1707
 Type2_cohort %>%
-  filter(model_clinF_percentiles == 5) %>%
-  select(model_clinF) %>%
-  describe()
-
-nrow(Type2_cohort %>%
-  filter(model_clinF_percentiles == 5 & progressed == 1))
-  
-
-nrow(Type2_cohort %>%
-  filter(model_clinF_percentiles == 0.2))
-
-
-# Need to initialize new column so loop works
-Type2_cohort$model_clinF_percentiles_results = NA
-Type2_cohort$model_clinF_Anti_percentiles_results = NA
-Type2_cohort$model_clinF_AntiGRS_percentiles_results = NA
-
-# Loop to calculate % progressed in CLIN F MODEL
-for (x in 1:10){
-  total = Type2_cohort %>%
-      filter(model_clinF_percentiles == x) %>%
-      nrow()
-    
-    antibody = Type2_cohort %>%
-      filter(model_clinF_percentiles == x & progressed == 1) %>%
-      nrow()
-    
-    Type2_cohort = Type2_cohort %>%
-      mutate(model_clinF_percentiles_results = ifelse(
-        model_clinF_percentiles == x,
-        antibody/total,
-        model_clinF_percentiles_results
-      ))
-}
-
-# Loop to calculate % progressed in CLIN F + ANTI MODEL
-for (x in 1:10){
-  total = Type2_cohort %>%
-      filter(model_clinF_Anti_percentiles == x) %>%
-      nrow()
-    
-    antibody = Type2_cohort %>%
-      filter(model_clinF_Anti_percentiles == x & progressed == 1) %>%
-      nrow()
-    
-    Type2_cohort = Type2_cohort %>%
-      mutate(model_clinF_Anti_percentiles_results = ifelse(
-        model_clinF_Anti_percentiles == x,
-        antibody/total,
-        model_clinF_Anti_percentiles_results
-      ))
-}
-
-# Loop to calculate % progressed in CLIN F + ANTI + GRS MODEL
-for (x in 1:10){
-  total = Type2_cohort %>%
-      filter(model_clinF_AntiGRS_percentiles == x) %>%
-      nrow()
-    
-    antibody = Type2_cohort %>%
-      filter(model_clinF_AntiGRS_percentiles == x & progressed == 1) %>%
-      nrow()
-    
-    Type2_cohort = Type2_cohort %>%
-      mutate(model_clinF_AntiGRS_percentiles_results = ifelse(
-        model_clinF_AntiGRS_percentiles == x,
-        antibody/total,
-        model_clinF_AntiGRS_percentiles_results
-      ))
-}
-
-# Graphing Calibration plots - Clin F Model
-ggplot(Type2_cohort, aes((model_clinF_percentiles)/10, model_clinF_percentiles_results)) +
-  geom_point() +
-  scale_x_continuous(limits=c(0, 1), breaks=(1:10)/10) +
-  scale_y_continuous(limits=c(0, 1)) +
-  xlab("Deciles by Distribution") +
-  ylab("% Progressed to Insulin <= 3 years") +
-  labs(title = "Clinical Features Model Calibration Plot") +
-  geom_smooth(method=lm) +
-  geom_abline(slope=1, intercept=0)
-
-# Graphing Calibration plots - Clin F + Anti Model
-ggplot(Type2_cohort, aes((model_clinF_Anti_percentiles)/10, model_clinF_Anti_percentiles_results)) +
-  geom_point() +
-  scale_x_continuous(limits=c(0, 1), breaks=(1:10)/10) +
-  scale_y_continuous(limits=c(0, 1)) +
-  xlab("Deciles by Distribution") +
-  ylab("% Progressed to Insulin <= 3 years") +
-  labs(title = "Clin F + Anti Model Calibration Plot") +
-  geom_smooth(method=lm) +
-  geom_abline(slope=1, intercept=0)
-
-# Graphing Calibration plots - Clin F + Anti + GRS Model
-ggplot(Type2_cohort, aes((model_clinF_AntiGRS_percentiles)/10, model_clinF_AntiGRS_percentiles_results)) +
-  geom_point() +
-  scale_x_continuous(limits=c(0, 1), breaks=(1:10)/10) +
-  scale_y_continuous(limits=c(0, 1)) +
-  xlab("Deciles by Distribution") +
-  ylab("% Progressed to Insulin <= 3 years") +
-  labs(title = "Clin F + Anti + GRS Model Calibration Plot") +
-  geom_smooth(method=lm) +
-  geom_abline(slope=1, intercept=0)
-  
-# Cleaing Environment 
-remove(antibody)
-remove(total)
+  filter(StartRightID == "SR0280" | StartRightID == "SR2462" | StartRightID == "SR1707") %>%
+  select(StartRightID, BMI, AgeatDiagnosis, model_clinF, Number_Antibodies, model_clinF_Anti, progressed)
 ```
 
 ```{r Clinical Features Model as a First-Line Screening Tool}
 #> This chunk is used to investigate the Clinical Features model as a screening tool
-#>  - Finds median of Type-2 antibody negative group as a threshold
-#>  - Generates a Boxplot and AUC ROC for the model against antibody outcomes
-
-Type2_cohort$Antibody_Positive
-
-#> Find Median of Type 2 Antibody Negative group to use as threshold = 0.018535 (1.8%)
-Type2_cohort %>%
-  filter(Antibody_Positive == 0) %>%
-  select(model_clinF) %>%
-  describe()
-
-#> Generating a Boxplot for those who are antibody positive/negative with Clin F Model
-ggplot(Type2_cohort,aes(as.factor(Antibody_Positive), model_clinF)) +
-  geom_boxplot() +
-  xlab("Antibody Positivity") +
-  ylab("Clinical Features Model Probabilities") +
-  ylim(c(0,1))
 
 # ROC AUC for Clinical Features Model discerning Single-Antibody Positivity
 glm.fit = glm(roc_data$Antibody_Positive ~ roc_data$model_clinF, family = binomial())
@@ -857,15 +492,7 @@ plot.new()
 lines(roc_data$model_clinF, glm.fit$fitted.values)
 
 (roc = roc(roc_data$Antibody_Positive, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
-
-coords(roc, x='best')
-
-#> Generating a Boxplot for those who are MULTI - antibody +ve  against Clin F Model
-ggplot(Type2_cohort,aes(as.factor(Number_Antibodies >= 2), model_clinF)) +
-  geom_boxplot() +
-  xlab("Antibody Positivity") +
-  ylab("Clinical Features Model Probabilities") +
-  ylim(c(0,1))
+# coords(roc, x='best')
 
 # ROC AUC for Clinical Features Model discerning MULTI-Antibody Positivity
 glm.fit = glm(roc_data$Multi_Antibody_Positive ~ roc_data$model_clinF, family = binomial())
@@ -873,674 +500,176 @@ plot.new()
 lines(roc_data$model_clinF, glm.fit$fitted.values)
 
 (roc = roc(roc_data$Multi_Antibody_Positive, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
+# coords(roc, x='best')
 
-coords(roc, x='best')
+#> CALIBRATION PLOT for Clin F Model Calibrating against Antibody Positivity
+#>  - Change "$Antibody_Positive" to "$Multi
+quantiles <- quantile(Type2_cohort$model_clinF, probs = seq(0, 1, by = 0.1), na.rm = TRUE)
+quantiles[1] <- 0.99 * quantiles[1]
+quantiles[length(quantiles)] <- 1.1 * quantiles[length(quantiles)]
+processed_quantiles <- cut(
+  Type2_cohort$model_clinF,
+  breaks = quantiles,
+  include_lowest = TRUE
+)
+processed_quantiles <- data.frame(y = Type2_cohort$Multi_Antibody_Positive, pred = Type2_cohort$model_clinF, dec = processed_quantiles) %>%
+  group_by(dec) %>%
+  mutate(prob_obs = sum(y) / n(),
+    obs = sum(y),
+    n_group = n(),
+    mnpred = mean(pred),
+    lower = lapply(sum(y), prop.test, n = n()),
+    upper = sapply(lower, function(x) x$conf.int[2]),
+    lower = sapply(lower, function(x) x$conf.int[1]))
+## plot
+ggplot(processed_quantiles, aes(x = mnpred, y = prob_obs)) +
+  geom_point() +
+  xlab("Mean predicted probability in each decile") +
+  ylab("Observed probability in each decile") +
+  labs(title = "Clinical Features on Multi-Antibody Positivity Cal. Plot") +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  ylim(c(0, 1)) + xlim(c(0, 1)) +
+  geom_errorbar(aes(ymin = lower, ymax = upper))
 ```
 
-``` {r FlowChart Numbers}
-#> Producing Numbers and percentages for the screening flowchart:
-#>  - To use this section, change the following threshold to a value of interest
-#>  - Previously used thresholds: 0.005 (bad), 0.018 (good), 0.05 (best), 0.071 (ROC), 0.1
-threshold = 0.1
+Clinical Features + Antibodies Model Adds to Antibodies Interpretation
+ - Section use for final 2 results slides in presentation:
+ - Does Antibodies Model perform well/is able to discriminate in those who HAVE BEEN antibody tested?
+ - DO they offer clinical use after antibodies?
 
-print(paste(
-  "Newly Diagnosed n =",
-  nrow(Type2_cohort)
-))
+``` {r Antibodies Model in Antibody tested}
+#> This chunk was used to create all 6 graphs on final 2 results slides: 2 ROC, 2 Calibration, 2 Box.
+#> To use this section:
+#>  - Set temp_roc_data filter to either be Antibody_Positive == 1 OR Antibody_Positive == 0 for +ves/-ves
+#>  - Change model_probabilities to the specified model (either "model_clinF_Anti" OR "model_clinF_AntiGRS") 
+#>  - Change model probabilities on line 569 to produce associated box plot
 
-print(paste(
-  "Patients with risk probability >=",
-  threshold,
-  "=",
-  nrow(
-    Type2_cohort %>% filter(model_clinF >= threshold)
-  ),
-  nrow(Type2_cohort %>% filter(model_clinF >= threshold))/nrow(Type2_cohort), "%"
-))
+#Creating temporary data frame to avoid messing with other ROC data and curves
+#This will be re-written later for second slide in this section
+temp_roc_data = roc_data %>%
+  filter(Antibody_Positive == 1)
 
-print(paste(
-  "Patients with risk probability <",
-  threshold,
-  "=",
-  nrow(
-    Type2_cohort %>% filter(model_clinF < threshold)
-  ),
-  nrow(Type2_cohort %>% filter(model_clinF < threshold))/nrow(Type2_cohort), "%"
-))
-
-print(paste(
-  "# High Risk Antibody Positive =",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 1)
-  ),
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 1))/nrow(Type2_cohort %>% filter(model_clinF >= threshold)),
-  "%"
-))
-
-print(paste(
-  "# High Risk Antibody Negative =",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 0)
-  ),
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 0))/nrow(Type2_cohort %>% filter(model_clinF >= threshold)),
-  "%"
-))
-
-
-print(paste(
-  "# Low-risk patients who progress =",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF < threshold & progressed == 1)
-  ),
-  nrow(Type2_cohort %>% filter(model_clinF < threshold & progressed == 1))/
-    nrow(Type2_cohort %>% filter(model_clinF < threshold)),
-  "%"
-))
-
-print(paste(
-  "# Low-risk patients who DIDNT progress =",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF < threshold & progressed == 0)
-  ),
-  nrow(Type2_cohort %>% filter(model_clinF < threshold & progressed == 0))/
-    nrow(Type2_cohort %>% filter(model_clinF < threshold)),
-  "%"
-))
-
-print(paste(
-  "# High-risk, antibody +ve patients who progress",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 1)
-  ),
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 1)
-  )/ nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 1)
-  ),
-  "%"
-))
-
-print(paste(
-  "# High-risk, antibody +ve patients who DONT progress",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 0)
-  ),
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 0)
-  )/ nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 1)
-  ),
-  "%"
-))
-
-print(paste(
-  "# High-risk, antibody -ve patients who progress",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 0 & progressed == 1)
-  ),
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 0 & progressed == 1)
-  )/ nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 0)
-  ),
-  "%"
-))
-
-print(paste(
-  "# High-risk, antibody -ve patients who DONT progress",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 0 & progressed == 0)
-  ),
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 0 & progressed == 0)
-  )/ nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 0)
-  ),
-  "%"
-))
-
-
-print(paste(
-  "# Total Progression pickup rate (high risk, antibody +ve) =",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 1)
-  ),
-  "/",
-  nrow(
-    Type2_cohort %>%
-      filter(progressed == 1)
-  ),
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 1)
-  )/ nrow(
-   Type2_cohort %>%
-      filter(progressed == 1)
-  ),
-  "%"
-))
-
-#> THIS SECTION USED FOR ANGUS" EXPERIMENTAL POSITIVE PREDICTIVE VALUE FLOWCHART
-threshold = 0.1 # Seting Threshold for quick code running
-
-print(paste(
-  "# Low Risk antibody positive patients",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF < threshold & Antibody_Positive == 1)
-  ),
-  "/",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF < threshold)
-  ),
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF < threshold & Antibody_Positive == 1)
-  )/ nrow(
-   Type2_cohort %>%
-      filter(model_clinF < threshold)
-  ),
-  "%"
-))
-
-print(paste(
-  "# Low Risk antibody negative patients",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF < threshold & Antibody_Positive == 0)
-  ),
-  "/",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF < threshold)
-  ),
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF < threshold & Antibody_Positive == 0)
-  )/ nrow(
-   Type2_cohort %>%
-      filter(model_clinF < threshold)
-  ),
-  "%"
-))
-
-print(paste(
-  "# High Risk antibody positive progression stats",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 1)
-  ),
-  "/",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold& Antibody_Positive == 1)
-  ),
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 1 & progressed == 1)
-  )/ nrow(
-   Type2_cohort %>%
-      filter(model_clinF >= threshold& Antibody_Positive == 1)
-  ),
-  "%"
-))
-
-print(paste(
-  "# High Risk antibody negative progression stats",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 0 & progressed == 1)
-  ),
-  "/",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold& Antibody_Positive == 0)
-  ),
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF >= threshold & Antibody_Positive == 0 & progressed == 1)
-  )/ nrow(
-   Type2_cohort %>%
-      filter(model_clinF >= threshold& Antibody_Positive == 0)
-  ),
-  "%"
-))
-
-print(paste(
-  "# Low Risk antibody Positive progression stats",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF < threshold & Antibody_Positive == 1 & progressed == 1)
-  ),
-  "/",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF < threshold& Antibody_Positive == 1)
-  ),
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF < threshold & Antibody_Positive == 1 & progressed == 1)
-  )/ nrow(
-   Type2_cohort %>%
-      filter(model_clinF < threshold& Antibody_Positive == 1)
-  ),
-  "%"
-))
-
-print(paste(
-  "# Low Risk antibody negative progression stats",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF < threshold & Antibody_Positive == 0 & progressed == 1)
-  ),
-  "/",
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF < threshold& Antibody_Positive == 0)
-  ),
-  nrow(
-    Type2_cohort %>%
-      filter(model_clinF < threshold & Antibody_Positive == 0 & progressed == 1)
-  )/ nrow(
-   Type2_cohort %>%
-      filter(model_clinF < threshold& Antibody_Positive == 0)
-  ),
-  "%"
-))
-
-```
-
-
-
-```{r Graphing Model Distributions - LEGACY}
-
-Type2_cohort %>%
-  select(model_clinF, model_clinF_GAD, model_clinF_IA2, model_clinF_Anti, model_clinF_AntiGRS, Time_to_insulin) %>%
-  mutate(Time_to_insulin = ifelse(!is.na(Time_to_insulin), "Progressed", "Did not progress")) %>%
-  rename("Clin Features Model" = "model_clinF") %>%
-  rename("Clin + GAD" = "model_clinF_GAD") %>%
-  rename("Clin + IA2" = "model_clinF_IA2") %>%
-  rename("Clin + Antibodies" = "model_clinF_Anti") %>%
-  rename("Clin + Anti + GRS" = "model_clinF_AntiGRS") %>%
-  gather(key = key, value = value, -Time_to_insulin) %>%
-  ggplot2::ggplot() +
-  geom_violin(aes(x = key, y = value,)) +
-  xlab('Models') +
-  ylab('Probability') +
-  geom_smooth(aes(x = key, y = value), method = 'lm') +
-  facet_wrap(~ Time_to_insulin)
-
-```
-
-
-``` {r Exploring Clin + Anti + GRS Deciles - OPTIONAL}
-#> Primary aim of this section is to explore why the model was able to detect some
-#> individuals who progressed, but not others
-#> So looking at model deciles within the progressed cohort
-
-#> Making temp cohort for desc analysis
-type2_progressed = Type2_cohort %>%
-  filter(progressed == "Progressed") %>%
-  mutate(decile = dplyr::ntile(model_clinF_AntiGRS, 10))
-
-table = print(
-  CreateTableOne(
-    data=type2_progressed,
-    vars = c("BMI", "AgeatDiagnosis", "GRS", "HbA1c_at_diagnosis", "model_clinF",
-             "model_clinF_GAD", "model_clinF_IA2", "model_clinF_Anti",
-             "model_clinF_AntiGRS", "Number_Antibodies"),
-    strata = "decile"
-  ),
-  test = FALSE,
-  noSpaces = TRUE
+#How many patients of this group progressed?
+nrow(
+  temp_roc_data %>%
+  filter(progressed == 1)
 )
 
-write.csv(table, file = "testTable.csv")
+# Reassign model_probabilities
+model_probabilities = temp_roc_data$model_clinF_Anti
 
-#Removing temporary variables
-remove(table)
-remove(type2_progressed)
-```
-
-``` {r Cleaning environment}
-remove(roc)
-remove(roc_data)
-```
-
-
-
-## Unused Legacy Code
-``` {r Legacy Unused Code}
-#### Graphing Violion models against eachother #####################
-#> Clin features model
-#> Clin features + autoantibodies (GAD IA2)
-#> compared using gg VIOLIN Plot
-not_insulin %>%
-  filter(!is.na(Model4Prob) & !is.na(Model1Prob) & !is.na(Model5Prob)) %>%
-  select(Model1Prob, Model4Prob, Model5Prob) %>%
-  rename("Clin Features Model" = "Model1Prob") %>%
-  rename("Clin + Antibody Model" = "Model4Prob") %>%
-  rename("Clin + Anti + GRS Model" = "Model5Prob") %>%
-  gather() %>%
-  ggplot2::ggplot() +
-  geom_violin(aes(x = key, y = value)) +
-  xlab('Models') +
-  ylab('Probability') +
-  geom_smooth(aes(x = key, y = value), method = 'lm')
-
-#### Obtaining P-value for ROC comparisons
-roc.test(roc, roc1)
-
-################################################################################
-################# Sub Investigation: Clin Features Model #######################
-################ Able to Detect Antibody Positive Patients #####################
-################################################################################
-### - Clinical Model distinguishes pretty well for those who would be 
-###   antibody positive
-###    > Antibody positive OUT OF ALL 3 (GAD, IA2, ZNT8)
-### - Therefore Clin model can be step 1 of 2 step process:
-###    > Patient qualifies for antibody testing from Clinical Model
-###    > Patient's antibody results come back and interpreted in second model
-###    > future: create new model based on HOW MANY antibodies are positive
-### - To test this:
-###    > AUC ROC curve for Clinical Features model and outcome is antibody +
-###    > Calibration plot for the same
-################################################################################
-# AUC ROC Curve for Antibody #################################
-#Estabishing outcome = if ANY 3 antibody+ is positive outcome
-not_insulin = not_insulin %>%
-  mutate(antibody_positive = ifelse(GADA_Status == 1 | IA2A_Status == 1 | ZNT8_Status == 1, 1, 0))
-
-#Estabishing outcome = if ALL 3 antibody- is negative outcome
-not_insulin = not_insulin %>%
-  mutate(antibody_positive = ifelse(GADA_Status == 0 & IA2A_Status == 0 & ZNT8_Status == 0, 0, 1))
-
-#Filtering to ensure equal length
-roc_data = not_insulin %>%
-  filter(!is.na(antibody_positive) & !is.na(Model1Prob))
-
-#Storing the logistic regression results
-glm.fit = glm(roc_data$antibody_positive ~ roc_data$Model1Prob, family = binomial())
+#> ROC AUC
+glm.fit = glm(temp_roc_data$progressed ~ model_probabilities, family = binomial())
 plot.new()
-lines(roc_data$Model4Prob, glm.fit$fitted.values)
+lines(model_probabilities, glm.fit$fitted.values)
 
-(roc = roc(roc_data$antibody_positive, glm.fit$fitted.values,
-           #auc.polygon=TRUE,
-           plot=TRUE,
-           #smoothed=TRUE,
-           #ci=TRUE,
-           #ci.alpha = 0.9,
-           #max.auc.polygon=TRUE,
-           #print.auc=TRUE,
-           #show.thres=TRUE
-           ))
+(roc = roc(temp_roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
+# coords(roc, x='best')
 
-#Getting threshold, sensitivity and specificity
-coords(roc, x='best')
+#Distribution 2.0: Boxplot
+ggplot(
+  temp_roc_data %>%
+    mutate(progressed = ifelse(progressed == 1, "Progressed", "Did not progress")),
+  aes(progressed, model_clinF_AntiGRS)
+) +
+  geom_boxplot() +
+  xlab("Progression to Insulin") +
+  ylab("Clin F + Antibodies + GRS Model Probabilities") +
+  ylim(c(0,1))
 
+#> CALIBRATION PLOT
+quantiles <- quantile(model_probabilities, probs = seq(0, 1, by = 0.1), na.rm = TRUE)
+quantiles[1] <- 0.99 * quantiles[1]
+quantiles[length(quantiles)] <- 1.1 * quantiles[length(quantiles)]
+processed_quantiles <- cut(
+  model_probabilities,
+  breaks = quantiles,
+  include_lowest = TRUE
+)
+processed_quantiles <- data.frame(y = temp_roc_data$progressed, pred = model_probabilities, dec = processed_quantiles) %>%
+  group_by(dec) %>%
+  mutate(prob_obs = sum(y) / n(),
+    obs = sum(y),
+    n_group = n(),
+    mnpred = mean(pred),
+    lower = lapply(sum(y), prop.test, n = n()),
+    upper = sapply(lower, function(x) x$conf.int[2]),
+    lower = sapply(lower, function(x) x$conf.int[1]))
+## plot
+ggplot(processed_quantiles, aes(x = mnpred, y = prob_obs)) +
+  geom_point() +
+  xlab("Mean predicted probability in each decile") +
+  ylab("Observed probability in each decile") +
+  labs(title = "Clin F + Anti + GRS Model Cal. Plot") +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  ylim(c(0, 1)) + xlim(c(0, 1)) +
+  geom_errorbar(aes(ymin = lower, ymax = upper))
 
-
-
-# Clin Features Calibration #############################
-deciles = list(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
-results = list()
-
-for (x in 1:10){
-  # Need to handle first and last number specially
-  if (x == 1) {
-    print('# Of patients with Antibodies within first Decile = ')
-    total = not_insulin %>%
-      filter(Model1Prob <= 0.1) %>%
-      nrow()
-    
-    antibody = not_insulin %>%
-      filter(Model1Prob <= 0.1 & antibody_positive == 1) %>%
-      nrow()
-    results[1] = antibody/total
-    # Need to handle first and last number specially
-  } 
-  else if (x == 10){
-    print('# Of patients progressed to Insulin within last Decile = ')
-    total = not_insulin %>%
-      filter(Model1Prob > 0.9) %>%
-      nrow()
-    
-    antibody = not_insulin %>%
-      filter(Model1Prob > 0.9 & antibody_positive == 1) %>%
-      nrow()
-    results[10] = antibody / total
-    # Index 2-9 = core loop
-  } 
-  else {
-    print(paste('# Of patients antibody positive within Decile: ', x, ' = '))
-    total = not_insulin %>%
-      filter(Model1Prob > deciles[x-1] & Model1Prob <= deciles[x]) %>%
-      nrow()
-    
-    antibody = not_insulin %>%
-      filter(Model1Prob > deciles[x-1] & Model1Prob <= deciles[x] & antibody_positive == 1) %>%
-      nrow()
-    
-    results[x] = antibody / total
-  }
-}
-
-plot(deciles, results,
-     xlim = c(0,1),
-     ylim = c(0,1),
-     main = 'Clinical Features Model',
-     xlab = 'Model Probability',
-     ylab = '% antibody positive')
-
-#For r-squared value
-summary(lm(unlist(results) ~ unlist(deciles), data=not_insulin))
-
-#graph trendline and print equation
-calibration_plot = lm(unlist(results) ~ unlist(deciles), data=not_insulin)
-lines(unlist(deciles),
-      predict(calibration_plot),
-      col = 2,
-      lwd = 2)
-(paste("y =", coef(calibration_plot)[[1]], "+", coef(calibration_plot)[[2]], "* x"))
-
-
-################################################################################
-##################### Model 4 and 5 in Antibody+ ###############################
-################################################################################
-### - If those are already antibody positive, is there any use in model?
-### - Run model in those antibody positive and see result
-################################################################################
-#Filtering for only those with antibodies
-roc_data = not_insulin %>%
-  filter(Number_Antibodies > 0)
-
-#Descriptive Stats ########################################
-nrow(roc_data)
-
-#look at those who did progress
-roc_data %>%
-  filter(progressed == 0) %>%
-  select(GRS, BMI, AgeatDiagnosis, HbA1c_at_diagnosis, Model4Prob) %>%
-  describe()
-
-roc_data %>%
-  filter(progressed == 0) %>%
-  nrow()
-
-#ROC #########################################
-roc_data = not_insulin %>%
-  filter(!is.na(progressed) & !is.na(Model4Prob) & Number_Antibodies >= 1)
-
-#Storing the logistic regression results
-glm.fit = glm(roc_data$progressed ~ roc_data$Model4Prob, family = binomial())
-
-#Graphing ROC
-plot.new()
-lines(roc_data$Model4Prob, glm.fit$fitted.values)
-(roc = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
-
-#Getting threshold, sensitivity and specificity
-coords(roc, x='best')
-
-# Model 5 in Antibody Positive! ROC Curve ##################################
-#Storing the logistic regression results
-roc_data = not_insulin %>%
-  filter(!is.na(progressed) & !is.na(Model5Prob) & Number_Antibodies >= 1)
-
-glm.fit = glm(roc_data$progressed ~ roc_data$Model5Prob, family = binomial())
-plot.new()
-lines(roc_data$Model5Prob, glm.fit$fitted.values)
-
-(roc1 = roc(roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
-
-#Getting threshold, sensitivity and specificity
-coords(roc, x='best')
-
-#COmpare two ROCS for p-value
-roc.test(roc, roc1)
-
-#Calibration ####################################
-deciles = list(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
-results = list()
-
-for (x in 1:10){
-  # Need to handle first and last number specially
-  if (x == 1) {
-    print('# Of patients progressed to Insulin within first Decile = ')
-    total = roc_data %>%
-      filter(Model4Prob <= 0.1) %>%
-      nrow()
-    
-    progressed = roc_data %>%
-      filter(Model4Prob <= 0.1 & progressed == 1) %>%
-      nrow()
-    results[1] = progressed/total
-    # Need to handle first and last number specially
-  } else if (x == 10){
-    print('# Of patients progressed to Insulin within last Decile = ')
-    total = roc_data %>%
-      filter(Model4Prob > 0.9) %>%
-      nrow()
-    
-    progressed = roc_data %>%
-      filter(Model4Prob > 0.9 & progressed == 1) %>%
-      nrow()
-    results[10] = progressed / total
-    # Index 2-9 = core loop
-  } else {
-    print(paste('# Of patients progressed to Insulin within Decile: ', x, ' = '))
-    total = roc_data %>%
-      filter(Model4Prob > deciles[x-1] & Model4Prob <= deciles[x]) %>%
-      nrow()
-    
-    progressed = roc_data %>%
-      filter(Model4Prob > deciles[x-1] & Model4Prob <= deciles[x] & progressed == 1) %>%
-      nrow()
-    
-    results[x] = progressed / total
-  }
-}
-
-plot(deciles, results,
-     xlim = c(0,1),
-     ylim = c(0,1),
-     main = 'Clinical Features + Antibody Model',
-     xlab = 'Model Probability',
-     ylab = '% progressed to insulin')
-
-#graph trendline and print equation
-calibration_plot = lm(unlist(results) ~ unlist(deciles), data=roc_data)
-lines(unlist(deciles),
-      predict(calibration_plot),
-      col = 2,
-      lwd = 2)
-(paste("y =", coef(calibration_plot)[[1]], "+", coef(calibration_plot)[[2]], "* x"))
-
-#For r-squared value
-summary(lm(unlist(results) ~ unlist(deciles), data=roc_data))
-
-#Descriptive Stats for Calibration ############################
-nrow(roc_data)
-
-#How many progressed
-roc_data %>%
-  filter(progressed == 1) %>%
-  nrow()
-
-#How many were over threshold
-roc_data %>%
-  filter(Model4Prob >= 0.1159171 & progressed == 1) %>%
-  nrow()
-
-################################################################################
-################## Finding Mean duration of follow up ##########################
-################################################################################
-### - How long was the average time from diagnosis to final follow up?
-### - A LOT of date formatting :(
-################################################################################
-#Create new column
-not_insulin$duration_follow_up = NA
-
-#Binary variable if they have V3 data
-not_insulin$HaveV3Data = NA
-not_insulin = not_insulin %>%
-  mutate(HaveV3Data = ifelse(V3Date_Contacted != '' & !is.na(V3Date_Contacted), 1, 0))
-
-#Binary variable if they have V2 data
-not_insulin$HaveV2Data = NA
-not_insulin = not_insulin %>%
-  mutate(HaveV2Data = ifelse(V2Date_Contacted != '' & !is.na(V2Date_Contacted), 1, 0))
-
-#Calculating difference between dates for patients who have V3
-V3_patients = not_insulin %>%
-  filter(HaveV3Data == 1) %>%
-  filter(DateofDiagnosis != '' & !is.na(DateofDiagnosis)) %>%
-  mutate(duration_follow_up = difftime(
-    as.Date(V3Date_Contacted, "%m/%d/%Y"),
-    as.Date(DateofDiagnosis, "%d-%B-%y"), 
-    units = 'weeks'), NA)
-
-#Calculating difference between dates for patients who dont have V3 data
-V2_patients = not_insulin %>%
-  filter(HaveV3Data == 0 & HaveV2Data == 1) %>%
-  filter(DateofDiagnosis != '' & !is.na(DateofDiagnosis)) %>%
-  mutate(duration_follow_up = difftime(
-    as.Date(V2Date_Contacted, "%d-%b-%y"),
-    as.Date(DateofDiagnosis, "%d-%B-%y"), 
-    units = 'weeks'), NA)
-
-updated_not_insulin = rbind.data.frame(V3_patients, V2_patients)
-updated_not_insulin %>%
-  mutate(duration_follow_up = as.numeric(duration_follow_up)) %>%
-  select(duration_follow_up) %>%
-  describe()
-
-
-
-
-
+#Cleaning Environment
+remove(temp_roc_data)
 
 ```
 
+``` {r Antibodies Model in Older Agegroup}
+# This section dedicated to investigating the antibodies model in those over 50yo
+#Re-assigning temp-roc data
+temp_roc_data = roc_data %>%
+  filter(AgeatDiagnosis > 50)
+
+#How many patients of this group progressed?
+nrow(
+  temp_roc_data %>%
+  filter(progressed == 1)
+)
+
+# ROC AUC
+glm.fit = glm(temp_roc_data$progressed ~ temp_roc_data$model_clinF_Anti, family = binomial())
+plot.new()
+lines(temp_roc_data$model_clinF_Anti, glm.fit$fitted.values)
+
+(roc = roc(temp_roc_data$progressed, glm.fit$fitted.values, auc=TRUE, plot=TRUE))
+
+#> To View Threshold and specificity/sensitivity UNCOMMENT the following line:
+# coords(roc, x='best')
+
+#Distribution 2.0: Boxplot
+ggplot(temp_roc_data %>%
+         mutate(progressed = ifelse(progressed == 0,
+                                    "Did not Progress",
+                                    "Progressed")
+                )
+        , aes(as.factor(progressed), model_clinF_Anti)) +
+  geom_boxplot() +
+  xlab("Progression to Insulin <= 3 years") +
+  ylab("Clinical Features + Antibodies Model Probability")
+
+#Calibration
+quantiles <- quantile(temp_roc_data$model_clinF_Anti, probs = seq(0, 1, by = 0.1), na.rm = TRUE)
+quantiles[1] <- 0.99 * quantiles[1]
+quantiles[length(quantiles)] <- 1.1 * quantiles[length(quantiles)]
+processed_quantiles <- cut(
+  temp_roc_data$model_clinF_Anti,
+  breaks = quantiles,
+  include_lowest = TRUE
+)
+processed_quantiles <- data.frame(y = temp_roc_data$progressed, pred = temp_roc_data$model_clinF_Anti, dec = processed_quantiles) %>%
+  group_by(dec) %>%
+  mutate(prob_obs = sum(y) / n(),
+    obs = sum(y),
+    n_group = n(),
+    mnpred = mean(pred),
+    lower = lapply(sum(y), prop.test, n = n()),
+    upper = sapply(lower, function(x) x$conf.int[2]),
+    lower = sapply(lower, function(x) x$conf.int[1]))
+## plot
+ggplot(processed_quantiles, aes(x = mnpred, y = prob_obs)) +
+  geom_point() +
+  xlab("Mean predicted probability in each decile") +
+  ylab("Observed probability in each decile") +
+  labs(title = "Clin F + Antibodies Model Cal. Plot") +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed") +
+  ylim(c(0, 1)) + xlim(c(0, 1)) +
+  geom_errorbar(aes(ymin = lower, ymax = upper))
+
+
+```
